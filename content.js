@@ -176,85 +176,233 @@ class SmartVideoDetector {
   }
 
   getVideoTitle(video) {
-    // Try multiple methods to get a meaningful title
-    const methods = [
-      // Video element attributes
-      () => video.title,
-      () => video.getAttribute('data-title'),
-      () => video.getAttribute('aria-label'),
+    // Comprehensive title detection with scoring system
+    const candidates = [];
 
-      // YouTube specific - multiple selectors
-      () => {
-        const selectors = [
-          'h1.title yt-formatted-string',
-          'h1 yt-formatted-string',
-          '.ytd-watch-metadata h1',
-          'yt-formatted-string.style-scope.ytd-video-primary-info-renderer',
-          '#container h1',
-          '.video-title'
-        ];
+    // Method 1: Video element attributes
+    this.addTitleCandidate(candidates, video.title, 'video.title', 3);
+    this.addTitleCandidate(candidates, video.getAttribute('data-title'), 'video[data-title]', 4);
+    this.addTitleCandidate(candidates, video.getAttribute('aria-label'), 'video[aria-label]', 3);
 
-        for (const selector of selectors) {
-          const element = document.querySelector(selector);
-          if (element && element.textContent && element.textContent.trim().length > 3) {
-            return element.textContent.trim();
-          }
+    // Method 2: YouTube specific (high priority)
+    const ytSelectors = [
+      'h1.title yt-formatted-string',
+      'h1 yt-formatted-string',
+      '.ytd-watch-metadata h1',
+      'yt-formatted-string.style-scope.ytd-video-primary-info-renderer',
+      '#container h1 yt-formatted-string',
+      '.video-title'
+    ];
+
+    ytSelectors.forEach(selector => {
+      const element = document.querySelector(selector);
+      if (element && element.textContent) {
+        this.addTitleCandidate(candidates, element.textContent.trim(), `youtube:${selector}`, 9);
+      }
+    });
+
+    // Method 3: Common video title selectors (medium-high priority)
+    const commonSelectors = [
+      'h1', 'h2', '.title', '.video-title', '.player-title',
+      '.media-title', '.content-title', '[data-title]',
+      '.video-info h1', '.video-info h2', '.video-info .title',
+      '.player-info .title', '.video-header h1', '.video-header h2'
+    ];
+
+    commonSelectors.forEach(selector => {
+      const elements = document.querySelectorAll(selector);
+      elements.forEach(element => {
+        if (element && element.textContent) {
+          const text = (element.textContent || element.dataset.title || '').trim();
+          this.addTitleCandidate(candidates, text, `common:${selector}`, 6);
         }
-        return null;
-      },
+      });
+    });
 
-      // Common video container patterns
-      () => {
-        const container = video.closest('.video-container, .player-container, .video-player, .video-wrapper, .player');
-        if (container) {
-          const titleEl = container.querySelector('h1, h2, h3, .title, .video-title, [data-title]');
-          return titleEl ? (titleEl.textContent || titleEl.dataset.title || '').trim() : null;
-        }
-        return null;
-      },
+    // Method 4: Search around video element (high priority)
+    this.searchAroundVideo(video, candidates);
 
-      // Look for nearby titles
+    // Method 5: Meta tags (medium priority)
+    const metaSelectors = [
+      'meta[property="og:title"]',
+      'meta[name="title"]',
+      'meta[property="twitter:title"]',
+      'meta[name="description"]'
+    ];
+
+    metaSelectors.forEach(selector => {
+      const meta = document.querySelector(selector);
+      if (meta && meta.content) {
+        const score = selector.includes('description') ? 2 : 5;
+        this.addTitleCandidate(candidates, meta.content.trim(), `meta:${selector}`, score);
+      }
+    });
+
+    // Method 6: Document title (lowest priority)
+    let docTitle = document.title.trim();
+    docTitle = this.cleanTitle(docTitle);
+    this.addTitleCandidate(candidates, docTitle, 'document.title', 1);
+
+    // Method 7: URL-based title extraction
+    const urlTitle = this.extractTitleFromUrl(window.location.href);
+    this.addTitleCandidate(candidates, urlTitle, 'url', 2);
+
+    // Find the best candidate
+    const bestCandidate = this.selectBestTitle(candidates);
+    return bestCandidate ? bestCandidate.text : null;
+  }
+
+  addTitleCandidate(candidates, text, source, score) {
+    if (!text || typeof text !== 'string') return;
+
+    text = text.trim();
+    if (text.length < 3 || text.length > 200) return;
+
+    // Skip obviously bad titles
+    const badTitles = [
+      'video', 'player', 'loading', 'untitled', 'null', 'undefined',
+      'watch', 'play', 'pause', 'loading...', 'video player'
+    ];
+
+    if (badTitles.some(bad => text.toLowerCase().includes(bad) && text.length < 20)) {
+      score = Math.max(1, score - 3); // Heavily penalize but don't eliminate
+    }
+
+    // Boost score for longer, more descriptive titles
+    if (text.length > 30) score += 1;
+    if (text.length > 60) score += 1;
+
+    // Penalize very generic titles
+    if (text.toLowerCase().match(/^(video|player|watch|play)$/)) {
+      score = 1;
+    }
+
+    candidates.push({
+      text,
+      source,
+      score,
+      length: text.length
+    });
+  }
+
+  searchAroundVideo(video, candidates) {
+    // Search in multiple directions from the video element
+    const searchPatterns = [
+      // Direct container
+      () => video.closest('.video-container, .player-container, .video-player, .video-wrapper, .player, .media, .content'),
+
+      // Parent elements
+      () => video.parentElement,
+      () => video.parentElement?.parentElement,
+      () => video.parentElement?.parentElement?.parentElement,
+
+      // Siblings
       () => {
         const parent = video.parentElement;
-        if (parent) {
-          const titleEl = parent.querySelector('h1, h2, h3, .title, .video-title');
-          return titleEl ? titleEl.textContent.trim() : null;
-        }
-        return null;
-      },
-
-      // Check for meta tags
-      () => {
-        const metaTitle = document.querySelector('meta[property="og:title"], meta[name="title"]');
-        const content = metaTitle ? metaTitle.content.trim() : null;
-        return content && content.length > 10 ? content : null;
-      },
-
-      // Page title as last resort
-      () => {
-        let title = document.title.trim();
-        // Clean common suffixes
-        title = title.replace(/ - YouTube$/, '')
-            .replace(/ on Vimeo$/, '')
-            .replace(/ - Twitch$/, '')
-            .replace(/ \| .+$/, '') // Remove " | Site Name" patterns
-            .trim();
-        return title.length > 3 ? title : null;
+        return parent ? Array.from(parent.children) : [];
       }
     ];
 
-    for (const method of methods) {
+    searchPatterns.forEach((getElements, patternIndex) => {
       try {
-        const result = method();
-        if (result && result.length > 3) {
-          return result;
-        }
+        const elements = getElements();
+        const elementsArray = Array.isArray(elements) ? elements : [elements].filter(Boolean);
+
+        elementsArray.forEach(container => {
+          if (!container || !container.querySelector) return;
+
+          // Look for title elements within container
+          const titleSelectors = [
+            'h1', 'h2', 'h3', '.title', '.video-title', '.player-title',
+            '.media-title', '.content-title', '[data-title]', '.name',
+            '.video-name', '.clip-title', '.video-info', '.description'
+          ];
+
+          titleSelectors.forEach(selector => {
+            const titleElements = container.querySelectorAll(selector);
+            titleElements.forEach(titleEl => {
+              const text = (titleEl.textContent || titleEl.dataset.title || '').trim();
+              if (text) {
+                // Higher score for closer elements
+                const proximityScore = Math.max(1, 8 - patternIndex);
+                this.addTitleCandidate(candidates, text, `proximity:${selector}`, proximityScore);
+              }
+            });
+          });
+        });
       } catch (e) {
-        continue;
+        // Continue if error
       }
+    });
+  }
+
+  cleanTitle(title) {
+    if (!title) return '';
+
+    // Remove common suffixes
+    const cleanPatterns = [
+      / - YouTube$/,
+      / on Vimeo$/,
+      / - Twitch$/,
+      / - Dailymotion$/,
+      / \| Dailymotion$/,
+      / - Video Dailymotion$/,
+      / \| .+$/,  // Remove " | Site Name" patterns
+      / - .+ - .+$/  // Remove complex suffixes
+    ];
+
+    cleanPatterns.forEach(pattern => {
+      title = title.replace(pattern, '');
+    });
+
+    return title.trim();
+  }
+
+  extractTitleFromUrl(url) {
+    try {
+      const urlObj = new URL(url);
+      const pathname = urlObj.pathname;
+
+      // Extract meaningful parts from pathname
+      const pathParts = pathname.split('/').filter(part => part && part.length > 2);
+      const lastPart = pathParts[pathParts.length - 1];
+
+      if (lastPart && lastPart.length > 3) {
+        // Convert URL-friendly text to readable title
+        return lastPart
+            .replace(/[-_]/g, ' ')
+            .replace(/\.(html|php|asp|jsp)$/i, '')
+            .replace(/\b\w/g, l => l.toUpperCase())
+            .trim();
+      }
+    } catch (e) {
+      // Continue if URL parsing fails
     }
 
     return null;
+  }
+
+  selectBestTitle(candidates) {
+    if (candidates.length === 0) return null;
+
+    // Sort by score (descending) and length (longer is better for same score)
+    const sorted = candidates.sort((a, b) => {
+      if (a.score !== b.score) return b.score - a.score;
+      return b.length - a.length;
+    });
+
+    const best = sorted[0];
+
+    // Final quality check
+    if (best.score < 2 && best.text.toLowerCase().match(/^(video|player|watch|untitled)/)) {
+      // Try to find a better alternative
+      const alternatives = sorted.slice(1).filter(c => c.score >= 2);
+      if (alternatives.length > 0) {
+        return alternatives[0];
+      }
+    }
+
+    return best;
   }
 
   getVideoThumbnail(video) {
@@ -314,14 +462,31 @@ class SmartVideoDetector {
         return;
       }
 
-      // Also check for duplicate by URL and title (in case ID generation changed)
-      const existingVideo = Object.values(videos).find(v =>
-          v.url === videoData.url && v.title === videoData.title
-      );
+      // For generic titles, be more permissive with duplicates
+      const isGenericTitle = this.isGenericTitle(videoData.title);
 
-      if (existingVideo) {
-        console.log('VIBRARY: Similar video already exists:', videoData.title);
-        return;
+      if (!isGenericTitle) {
+        // Only check for duplicates if title is specific enough
+        const existingVideo = Object.values(videos).find(v =>
+            v.url === videoData.url && v.title === videoData.title
+        );
+
+        if (existingVideo) {
+          console.log('VIBRARY: Similar video already exists:', videoData.title);
+          return;
+        }
+      } else {
+        // For generic titles, allow duplicates but check URL+timestamp to avoid spam
+        const recentVideo = Object.values(videos).find(v =>
+            v.url === videoData.url &&
+            v.title === videoData.title &&
+            (Date.now() - v.watchedAt) < 60000 // Within 1 minute
+        );
+
+        if (recentVideo) {
+          console.log('VIBRARY: Recent generic video already exists:', videoData.title);
+          return;
+        }
       }
 
       videos[videoData.id] = videoData;
@@ -332,6 +497,27 @@ class SmartVideoDetector {
     } catch (error) {
       console.error('VIBRARY: Error recording video:', error);
     }
+  }
+
+  isGenericTitle(title) {
+    if (!title) return true;
+
+    const genericPatterns = [
+      /^(video|player|watch|play)$/i,
+      /video player$/i,
+      /dailymotion video player$/i,
+      /vimeo player$/i,
+      /media player$/i,
+      /^untitled/i,
+      /^loading/i,
+      /^watch$/i,
+      /^play$/i
+    ];
+
+    // Also consider very short titles as generic
+    if (title.length < 8) return true;
+
+    return genericPatterns.some(pattern => pattern.test(title.trim()));
   }
 }
 

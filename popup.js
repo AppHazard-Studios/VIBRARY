@@ -457,21 +457,16 @@ class Vibrary {
 
     const dataStr = JSON.stringify(exportData, null, 2);
 
-    // Copy to clipboard
-    try {
-      await navigator.clipboard.writeText(dataStr);
-      alert('VIBRARY data exported to clipboard! Save it somewhere safe.');
-    } catch (err) {
-      // Fallback: create download
-      const blob = new Blob([dataStr], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `vibrary-export-${new Date().toISOString().split('T')[0]}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      alert('VIBRARY data downloaded as file!');
-    }
+    // Create and download file
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `vibrary-backup-${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    alert(`VIBRARY data exported! ${Object.keys(this.videos).length} videos and ${Object.keys(this.playlists).length} playlists saved.`);
   }
 
   showImportModal() {
