@@ -1,530 +1,365 @@
-class SmartVideoDetector {
+// VIBRARY Content Script - Chrome-Native Video Detection
+class ChromeNativeVideoDetector {
   constructor() {
-    this.recordedVideos = new Set();
-    this.detectionCount = 0;
-    this.lastDetectedTitle = '';
-    this.detectionTimeout = null;
-    this.titleChangeTimeout = null;
+    this.detectedVideos = new Map(); // Use Map for better deduplication
+    this.lastMediaTitle = '';
+    this.mediaCheckInterval = null;
     this.init();
   }
 
   init() {
-    console.log('🎬 VIBRARY: Smart detector using Chrome\'s native video detection');
+    console.log('🎬 VIBRARY: Chrome-native video detector initialized');
     console.log('🎬 VIBRARY: Monitoring page:', window.location.href);
 
-    // Method 1: Piggyback off Chrome's picture-in-picture detection
-    this.setupPictureInPictureDetection();
-
-    // Method 2: Use Media Session API (Chrome's native media tracking)
+    // Method 1: Chrome Media Session API (primary detection)
     this.setupMediaSessionDetection();
 
-    // Method 3: Smart video element detection
+    // Method 2: Chrome Picture-in-Picture events (secondary confirmation)
+    this.setupPictureInPictureDetection();
+
+    // Method 3: Direct video element monitoring (fallback for sites without Media Session)
     this.setupVideoElementDetection();
-
-    // Method 4: URL-based detection for known platforms
-    this.setupURLBasedDetection();
-
-    // Method 5: Monitor title changes more aggressively
-    this.setupTitleMonitoring();
-
-    // Method 6: Debug monitor to show what Chrome is doing
-    this.setupDebugMonitor();
-  }
-
-  setupTitleMonitoring() {
-    // Monitor document title changes for better detection
-    let lastTitle = document.title;
-
-    const checkTitleChange = () => {
-      if (document.title !== lastTitle && document.title.length > 5) {
-        console.log('📝 VIBRARY: Title changed from:', lastTitle, 'to:', document.title);
-        lastTitle = document.title;
-
-        // Clear any pending detection and set a new one
-        if (this.titleChangeTimeout) {
-          clearTimeout(this.titleChangeTimeout);
-        }
-
-        this.titleChangeTimeout = setTimeout(() => {
-          this.detectVideoFromTitleChange();
-        }, 1000);
-      }
-    };
-
-    // Check title changes frequently
-    setInterval(checkTitleChange, 500);
-
-    // Also watch for title element changes
-    const titleObserver = new MutationObserver(checkTitleChange);
-    const titleElement = document.querySelector('title');
-    if (titleElement) {
-      titleObserver.observe(titleElement, { childList: true });
-    }
-  }
-
-  detectVideoFromTitleChange() {
-    // Only detect if we're on a video platform and have meaningful content
-    const url = window.location.href;
-    if (this.isVideoURL(url)) {
-      console.log('🔍 VIBRARY: Detecting video from title change');
-      this.debouncedDetection();
-    }
-  }
-
-  debouncedDetection() {
-    // Prevent rapid duplicate detections
-    if (this.detectionTimeout) {
-      clearTimeout(this.detectionTimeout);
-    }
-
-    this.detectionTimeout = setTimeout(() => {
-      this.performDetection();
-    }, 800); // Wait 800ms before detecting
-  }
-
-  performDetection() {
-    const title = this.getBestTitle();
-    const url = window.location.href;
-
-    // Skip if we just detected the same title recently
-    if (title === this.lastDetectedTitle) {
-      console.log('⏭️ VIBRARY: Same title detected recently, skipping:', title);
-      return;
-    }
-
-    // Filter out obviously bad titles
-    if (this.isBadTitle(title)) {
-      console.log('❌ VIBRARY: Filtered out bad title:', title);
-      return;
-    }
-
-    console.log('🎯 VIBRARY: Performing detection with title:', title);
-    this.lastDetectedTitle = title;
-
-    // Proceed with normal detection
-    this.detectFromURL(url);
-  }
-
-  isBadTitle(title) {
-    if (!title || title.length < 4) return true;
-
-    const badPatterns = [
-      /^shorts$/i,
-      /^comments?\s*\d*$/i,
-      /^\d+\s*comments?$/i,
-      /^loading/i,
-      /^watch/i,
-      /^video$/i,
-      /^player$/i,
-      /^\s*-\s*$/,
-      /^undefined$/i,
-      /^null$/i,
-      /^youtube$/i,
-      /^vimeo$/i,
-      /^pornhub$/i
-    ];
-
-    return badPatterns.some(pattern => pattern.test(title.trim()));
-  }
-
-  getBestTitle() {
-    // Prioritize Chrome's Media Session first
-    if (navigator.mediaSession?.metadata?.title) {
-      const mediaTitle = navigator.mediaSession.metadata.title;
-      const mediaArtist = navigator.mediaSession.metadata.artist;
-
-      if (mediaArtist && mediaArtist !== mediaTitle) {
-        return `${mediaArtist} - ${mediaTitle}`;
-      }
-      return mediaTitle;
-    }
-
-    // Then check video elements for Chrome-provided titles
-    const videos = document.querySelectorAll('video');
-    for (const video of videos) {
-      if (video.title && video.title.length > 4 && !this.isBadTitle(video.title)) {
-        return video.title;
-      }
-    }
-
-    // Use our existing title extraction method
-    return this.getTitle();
-  }
-
-  setupDebugMonitor() {
-    // Monitor Chrome's video detection in real-time
-    setInterval(() => {
-      const videos = document.querySelectorAll('video');
-      const activeVideos = Array.from(videos).filter(v => {
-        const rect = v.getBoundingClientRect();
-        return rect.width > 200 && rect.height > 150 && v.readyState > 0;
-      });
-
-      if (activeVideos.length > 0) {
-        console.log(`🔍 VIBRARY: Chrome has ${activeVideos.length} active video(s) on page`);
-        activeVideos.forEach((video, index) => {
-          console.log(`📺 Video ${index + 1}:`, {
-            readyState: video.readyState,
-            networkState: video.networkState,
-            duration: video.duration,
-            currentTime: video.currentTime,
-            paused: video.paused,
-            title: video.title || 'No title',
-            src: video.currentSrc || video.src || 'No src'
-          });
-        });
-      }
-    }, 10000); // Every 10 seconds
-  }
-
-  setupPictureInPictureDetection() {
-    // Listen for Chrome's native PiP events
-    document.addEventListener('enterpictureinpicture', (event) => {
-      console.log('📺 VIBRARY: Video entered PiP mode - Chrome detected it!');
-      const video = event.target;
-
-      // Chrome has identified this as a significant video
-      // Extract all available metadata Chrome has detected
-      const chromeDetectedData = {
-        title: video.title || video.getAttribute('aria-label') || video.getAttribute('alt'),
-        poster: video.poster,
-        src: video.currentSrc || video.src,
-        duration: video.duration,
-        videoWidth: video.videoWidth,
-        videoHeight: video.videoHeight
-      };
-
-      console.log('📺 VIBRARY: Chrome detected video metadata:', chromeDetectedData);
-      this.processVideo(video, chromeDetectedData);
-    });
-
-    document.addEventListener('leavepictureinpicture', (event) => {
-      console.log('📺 VIBRARY: Video left PiP mode');
-      // Still process it since Chrome confirmed it's a real video
-      this.processVideo(event.target);
-    });
-
-    // Check if there's already a PiP video active
-    if (document.pictureInPictureElement) {
-      console.log('📺 VIBRARY: Found existing PiP video');
-      this.processVideo(document.pictureInPictureElement);
-    }
   }
 
   setupMediaSessionDetection() {
-    // Use Chrome's Media Session API - this contains the REAL title Chrome detected
-    if ('mediaSession' in navigator) {
-      console.log('🎵 VIBRARY: Monitoring Chrome\'s Media Session API');
+    console.log('🎵 VIBRARY: Setting up Media Session detection');
 
-      let lastMediaTitle = '';
+    if (!navigator.mediaSession) {
+      console.log('🚫 VIBRARY: Media Session API not supported');
+      return;
+    }
 
-      const checkMediaSession = () => {
-        const metadata = navigator.mediaSession.metadata;
-        if (metadata && metadata.title) {
-          const currentTitle = metadata.title;
+    console.log('✅ VIBRARY: Media Session API supported');
 
-          // Only process if title changed and is meaningful
-          if (currentTitle !== lastMediaTitle && currentTitle.length > 3 && !this.isBadTitle(currentTitle)) {
-            console.log('🎵 VIBRARY: Chrome\'s Media Session metadata changed:', {
-              title: metadata.title,
-              artist: metadata.artist,
-              album: metadata.album,
-              artwork: metadata.artwork?.length || 0
-            });
+    // Debug: Log initial state
+    this.debugCurrentState();
 
-            lastMediaTitle = currentTitle;
-            this.processMediaSession(metadata);
-          }
+    // Start checking every second
+    this.mediaCheckInterval = setInterval(() => {
+      this.checkMediaSession();
+    }, 1000);
+
+    // Also check at specific intervals
+    setTimeout(() => this.checkMediaSession(), 500);
+    setTimeout(() => this.checkMediaSession(), 2000);
+    setTimeout(() => this.checkMediaSession(), 5000);
+    setTimeout(() => this.checkMediaSession(), 10000);
+  }
+
+  debugCurrentState() {
+    try {
+      const hasMediaSession = !!navigator.mediaSession;
+      const hasMetadata = navigator.mediaSession && navigator.mediaSession.metadata;
+      const playbackState = navigator.mediaSession ? navigator.mediaSession.playbackState : 'no-session';
+
+      console.log('🔍 VIBRARY: Current state check:', {
+        hasMediaSession: hasMediaSession,
+        hasMetadata: !!hasMetadata,
+        playbackState: playbackState,
+        url: window.location.href
+      });
+
+      if (hasMetadata) {
+        console.log('📋 VIBRARY: Found metadata:', {
+          title: navigator.mediaSession.metadata.title,
+          artist: navigator.mediaSession.metadata.artist || 'no artist'
+        });
+      }
+
+      // Check for video elements in detail
+      const videos = document.querySelectorAll('video');
+      console.log('🎥 VIBRARY: Found video elements:', videos.length);
+
+      Array.from(videos).forEach((video, index) => {
+        const isSignificant = video.offsetWidth >= 200 && video.offsetHeight >= 150;
+        const isPlaying = !video.paused && video.currentTime > 0;
+
+        console.log(`📺 Video ${index + 1}:`, {
+          paused: video.paused,
+          readyState: video.readyState,
+          currentTime: Math.floor(video.currentTime),
+          duration: Math.floor(video.duration) || 'unknown',
+          width: video.offsetWidth,
+          height: video.offsetHeight,
+          isSignificant: isSignificant,
+          isPlaying: isPlaying,
+          hasTitle: !!video.title,
+          title: video.title || 'no title',
+          src: (video.currentSrc || video.src || 'no src').substring(0, 100)
+        });
+
+        // If this is a significant, playing video, try to detect it
+        if (isSignificant && isPlaying) {
+          console.log('🎯 VIBRARY: Found significant playing video!');
+          this.processSignificantVideo(video); // Remove the index parameter and any await
         }
-      };
+      });
 
-      // Check more frequently for rapid changes
-      setInterval(checkMediaSession, 1000);
+    } catch (error) {
+      console.error('❌ VIBRARY: Error in debug state check:', error);
+    }
+  }
 
-      // Initial checks
-      setTimeout(checkMediaSession, 500);
-      setTimeout(checkMediaSession, 2000);
-      setTimeout(checkMediaSession, 5000);
+  checkMediaSession() {
+    try {
+      // Always log that we're checking
+      console.log('🔄 VIBRARY: Checking media session...');
+
+      if (!navigator.mediaSession) {
+        console.log('❌ VIBRARY: No media session available');
+        return;
+      }
+
+      const metadata = navigator.mediaSession.metadata;
+
+      if (!metadata) {
+        console.log('📭 VIBRARY: No metadata in media session');
+        this.debugCurrentState(); // Show what we do have
+        return;
+      }
+
+      if (!metadata.title) {
+        console.log('📝 VIBRARY: Metadata exists but no title');
+        return;
+      }
+
+      const currentTitle = metadata.title.trim();
+      console.log('🎵 VIBRARY: Found media session title:', currentTitle);
+
+      const sessionKey = window.location.href + ':' + currentTitle;
+
+      if (this.detectedVideos.has(sessionKey)) {
+        console.log('⏭️ VIBRARY: Already detected this video');
+        return;
+      }
+
+      if (currentTitle.length < 2) {
+        console.log('❌ VIBRARY: Title too short:', currentTitle);
+        return;
+      }
+
+      console.log('✅ VIBRARY: Processing new video from media session');
+      this.processVideoFromMediaSession(metadata);
+
+    } catch (error) {
+      console.error('💥 VIBRARY: Error checking media session:', error);
     }
   }
 
   setupVideoElementDetection() {
-    // Enhanced video element detection using Chrome's video events
-    const videoEvents = [
-      'loadedmetadata', // Chrome has loaded video metadata (includes title info)
-      'loadeddata',     // Chrome has loaded video data
-      'canplay',        // Chrome can play video (confirmed it's valid)
-      'play',           // User hits play
-      'playing'         // Video is actually playing
-    ];
+    console.log('🎥 VIBRARY: Setting up direct video element detection');
 
-    videoEvents.forEach(eventType => {
-      document.addEventListener(eventType, (event) => {
-        if (event.target.tagName === 'VIDEO') {
-          console.log(`🎥 VIBRARY: Chrome fired ${eventType} event - video confirmed`);
+    // Listen for video play events
+    document.addEventListener('play', (event) => {
+      if (event.target.tagName === 'VIDEO') {
+        console.log('▶️ VIBRARY: Video play event detected');
+        setTimeout(() => {
+          this.checkVideoElement(event.target);
+        }, 1000); // Give it a moment to stabilize
+      }
+    }, true);
 
-          // Extract Chrome's detected metadata
-          const video = event.target;
-          const chromeData = {
-            duration: video.duration,
-            videoWidth: video.videoWidth,
-            videoHeight: video.videoHeight,
-            readyState: video.readyState,
-            networkState: video.networkState,
-            currentSrc: video.currentSrc,
-            poster: video.poster,
-            title: video.title
-          };
+    // Listen for video playing events (more reliable)
+    document.addEventListener('playing', (event) => {
+      if (event.target.tagName === 'VIDEO') {
+        console.log('🎬 VIBRARY: Video playing event detected');
+        setTimeout(() => {
+          this.checkVideoElement(event.target);
+        }, 1000);
+      }
+    }, true);
 
-          console.log('🎥 VIBRARY: Chrome video metadata:', chromeData);
+    // Listen for video loadedmetadata events
+    document.addEventListener('loadedmetadata', (event) => {
+      if (event.target.tagName === 'VIDEO') {
+        console.log('📋 VIBRARY: Video metadata loaded');
+        setTimeout(() => {
+          this.checkVideoElement(event.target);
+        }, 2000);
+      }
+    }, true);
+  }
 
-          // Use debounced detection instead of immediate
-          this.debouncedDetection();
-        }
-      }, true);
-    });
+  checkVideoElement(video) {
+    try {
+      const isSignificant = this.isSignificantVideo(video);
+      const isPlaying = !video.paused && video.currentTime > 0;
 
-    // Monitor for new video elements that Chrome adds
-    const observer = new MutationObserver((mutations) => {
-      mutations.forEach(mutation => {
-        mutation.addedNodes.forEach(node => {
-          if (node.tagName === 'VIDEO') {
-            console.log('🆕 VIBRARY: Chrome added new video element to DOM');
-            // Use debounced detection
-            setTimeout(() => this.debouncedDetection(), 1500);
-          } else if (node.querySelectorAll) {
-            const videos = node.querySelectorAll('video');
-            if (videos.length > 0) {
-              console.log(`🆕 VIBRARY: Found ${videos.length} video(s) in new DOM content`);
-              setTimeout(() => this.debouncedDetection(), 1500);
-            }
-          }
-        });
+      console.log('🔍 VIBRARY: Checking video element:', {
+        significant: isSignificant,
+        playing: isPlaying,
+        width: video.offsetWidth,
+        height: video.offsetHeight,
+        currentTime: video.currentTime,
+        duration: video.duration
       });
-    });
 
-    observer.observe(document.body, { childList: true, subtree: true });
-  }
-
-  setupURLBasedDetection() {
-    // Smart URL monitoring for video platforms
-    let currentUrl = location.href;
-    let currentVideoId = this.getVideoIdFromUrl(currentUrl);
-
-    setInterval(() => {
-      if (location.href !== currentUrl) {
-        const oldUrl = currentUrl;
-        const oldVideoId = currentVideoId;
-
-        currentUrl = location.href;
-        currentVideoId = this.getVideoIdFromUrl(currentUrl);
-
-        console.log('🔗 VIBRARY: URL changed:', currentUrl);
-
-        // Only clear cache if we're actually on a different video
-        if (oldVideoId !== currentVideoId) {
-          console.log('🆕 VIBRARY: Different video ID detected, clearing cache');
-          this.recordedVideos.clear();
-          this.lastDetectedTitle = '';
-        }
-
-        // Platform-specific detection with debouncing
-        if (this.isVideoURL(currentUrl)) {
-          setTimeout(() => this.debouncedDetection(), 1000);
-          setTimeout(() => this.debouncedDetection(), 3000);
-          setTimeout(() => this.debouncedDetection(), 5000);
-        }
+      if (isSignificant && (isPlaying || video.readyState >= 3)) {
+        console.log('🎯 VIBRARY: Processing significant video from element');
+        this.processSignificantVideo(video); // Remove await since checkVideoElement is not async
       }
-    }, 500);
-
-    // Initial URL check
-    if (this.isVideoURL(currentUrl)) {
-      setTimeout(() => this.debouncedDetection(), 2000);
-    }
-  }
-
-  getVideoIdFromUrl(url) {
-    // Extract unique identifiers from URLs to detect video changes
-    if (this.isYouTube(url)) {
-      return this.getYouTubeVideoId(url);
-    }
-    if (this.isVimeo(url)) {
-      const match = url.match(/vimeo\.com\/(\d+)/);
-      return match ? match[1] : null;
-    }
-    if (this.isPornHub(url)) {
-      const match = url.match(/viewkey=([a-f0-9]+)/);
-      return match ? match[1] : null;
-    }
-    return url; // For other sites, use full URL
-  }
-
-  processVideo(videoElement) {
-    if (!this.isSignificantVideo(videoElement)) {
-      return;
-    }
-
-    console.log('🎬 VIBRARY: Processing video element:', videoElement);
-
-    const videoId = this.getVideoIdentifier(videoElement);
-    if (this.recordedVideos.has(videoId)) {
-      console.log('⏭️ VIBRARY: Video already processed:', videoId);
-      return;
-    }
-
-    const videoData = this.extractVideoData(videoElement);
-    if (videoData) {
-      console.log('✅ VIBRARY: Successfully extracted video data:', videoData);
-      this.recordVideo(videoData);
-      this.recordedVideos.add(videoId);
-    }
-  }
-
-  processMediaSession(metadata) {
-    // Extract info from Chrome's media session
-    const videoData = {
-      id: this.generateId(metadata.title + window.location.href),
-      url: window.location.href,
-      title: metadata.title || 'Media Session Video',
-      thumbnail: metadata.artwork?.[0]?.src || '',
-      platform: this.detectPlatform(window.location.href),
-      watchedAt: Date.now(),
-      rating: 0
-    };
-
-    const videoId = this.getVideoIdentifier(null, videoData);
-    if (!this.recordedVideos.has(videoId)) {
-      this.recordVideo(videoData);
-      this.recordedVideos.add(videoId);
-    }
-  }
-
-  detectFromURL(url) {
-    console.log('🔍 VIBRARY: Detecting from URL:', url);
-
-    let videoData = null;
-
-    if (this.isYouTube(url)) {
-      videoData = this.extractYouTubeFromURL(url);
-    } else if (this.isVimeo(url)) {
-      videoData = this.extractVimeoFromURL(url);
-    } else if (this.isPornHub(url)) {
-      videoData = this.extractPornHubFromURL(url);
-    }
-
-    if (videoData) {
-      const videoId = this.getVideoIdentifier(null, videoData);
-      if (!this.recordedVideos.has(videoId)) {
-        console.log('📝 VIBRARY: URL-based detection successful:', videoData);
-        this.recordVideo(videoData);
-        this.recordedVideos.add(videoId);
-      }
+    } catch (error) {
+      console.error('❌ VIBRARY: Error checking video element:', error);
     }
   }
 
   isSignificantVideo(video) {
-    if (!video || video.tagName !== 'VIDEO') return false;
+    // Must be reasonably sized (not a tiny ad or preview)
+    const width = video.offsetWidth || video.videoWidth || 0;
+    const height = video.offsetHeight || video.videoHeight || 0;
 
-    const rect = video.getBoundingClientRect();
+    // Check if video has substantial duration (indicates real content)
+    const hasSubstantialDuration = video.duration && video.duration > 30; // 30+ seconds
 
-    // Must be reasonably sized (not an ad or tiny preview)
-    if (rect.width < 200 || rect.height < 150) return false;
+    // For videos with good duration, be more lenient with size
+    if (hasSubstantialDuration) {
+      console.log('🎯 VIBRARY: Video has substantial duration:', Math.floor(video.duration), 'seconds');
+      // Allow smaller sizes for videos with real content
+      if (width >= 120 && height >= 80) {
+        return true;
+      }
+    }
 
-    // Must be visible
-    if (rect.width === 0 || rect.height === 0) return false;
-
-    // Exclude obvious ads
-    if ((rect.width === 300 && rect.height === 250) ||
-        (rect.width === 728 && rect.height === 90)) {
+    // Standard size requirements for videos without duration info
+    if (width < 200 || height < 150) {
+      console.log('❌ VIBRARY: Video too small:', width, 'x', height);
       return false;
     }
 
+    // Must be visible
+    if (width === 0 || height === 0) {
+      console.log('❌ VIBRARY: Video not visible');
+      return false;
+    }
+
+    // Exclude obvious ad sizes
+    if ((width === 300 && height === 250) ||
+        (width === 728 && height === 90)) {
+      console.log('❌ VIBRARY: Video appears to be an ad');
+      return false;
+    }
+
+    console.log('✅ VIBRARY: Video passes significance test:', width, 'x', height);
     return true;
   }
 
-  getVideoIdentifier(videoElement, videoData = null) {
-    // Create unique identifier for video
-    if (videoData) {
-      return videoData.id;
+  async processSignificantVideo(video) {
+    try {
+      console.log('🎬 VIBRARY: Processing significant video element');
+
+      const title = this.extractVideoTitle(video);
+
+      if (!title || title.length < 2) {
+        console.log('❌ VIBRARY: Video has no valid title:', title);
+        return;
+      }
+
+      console.log('📝 VIBRARY: Extracted video title:', title);
+
+      // Create smart key for better deduplication
+      const videoKey = this.generateVideoKey(title, window.location.href);
+
+      // Check for existing similar videos
+      if (this.isDuplicateVideo(title, window.location.href)) {
+        console.log('⏭️ VIBRARY: Similar video already processed');
+        return;
+      }
+
+      // Extract thumbnail (this is now async and much better!)
+      const thumbnail = await this.extractVideoThumbnail(video);
+
+      const videoData = {
+        id: this.generateId(title + window.location.href),
+        url: window.location.href,
+        title: title,
+        thumbnail: thumbnail,
+        platform: this.detectPlatform(window.location.href),
+        source: 'video-element',
+        watchedAt: Date.now(),
+        rating: 0
+      };
+
+      console.log('📋 VIBRARY: Created video data from element:', {
+        title: videoData.title,
+        platform: videoData.platform,
+        hasThumbnail: !!videoData.thumbnail,
+        thumbnailType: videoData.thumbnail.startsWith('data:') ? 'captured-frame' : 'url',
+        videoKey: videoKey
+      });
+
+      this.detectedVideos.set(videoKey, videoData);
+      this.recordVideo(videoData);
+
+    } catch (error) {
+      console.error('💥 VIBRARY: Error processing significant video:', error);
     }
-
-    const url = window.location.href;
-
-    // Use platform-specific IDs
-    if (this.isYouTube(url)) {
-      const videoId = this.getYouTubeVideoId(url);
-      return videoId ? `yt_${videoId}` : this.generateId(url);
-    }
-
-    if (this.isVimeo(url)) {
-      const match = url.match(/vimeo\.com\/(\d+)/);
-      return match ? `vimeo_${match[1]}` : this.generateId(url);
-    }
-
-    // For generic videos, use src or current URL
-    const src = videoElement?.currentSrc || videoElement?.src || url;
-    return this.generateId(src + Date.now());
   }
 
-  extractVideoData(videoElement) {
-    const url = window.location.href;
-    const title = this.getTitle();
-
-    if (!title || title.length < 3) {
-      console.log('❌ VIBRARY: No valid title found');
-      return null;
+  isDuplicateVideo(title, url) {
+    // Check if we already have this video or a very similar one
+    for (const [key, videoData] of this.detectedVideos) {
+      if (key.includes('youtube:') && url.includes('youtube')) {
+        // For YouTube, same video ID = duplicate
+        const currentVideoId = this.extractYouTubeVideoId(url);
+        const existingVideoId = this.extractYouTubeVideoId(key);
+        if (currentVideoId && existingVideoId && currentVideoId === existingVideoId) {
+          return true;
+        }
+      } else if (this.isSimilarTitle(title, videoData.title || '') &&
+          this.normalizeUrl(url) === this.normalizeUrl(videoData.url || '')) {
+        return true;
+      }
     }
-
-    const videoId = this.getVideoIdentifier(videoElement);
-    const thumbnail = this.getThumbnail(videoElement);
-
-    return {
-      id: videoId,
-      url: url,
-      title: title,
-      thumbnail: thumbnail,
-      platform: this.detectPlatform(url),
-      watchedAt: Date.now(),
-      rating: 0
-    };
+    return false;
   }
 
-  getTitle() {
-    // Universal title extraction
+  generateId(input) {
+    try {
+      return btoa(encodeURIComponent(input))
+          .replace(/[^a-zA-Z0-9]/g, '')
+          .substring(0, 20) + '_' + Date.now().toString(36);
+    } catch (e) {
+      return 'video_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);
+    }
+  }
+
+  extractVideoTitle(video) {
+    // Try multiple methods to get video title
     const methods = [
-      // Platform-specific
-      () => document.querySelector('yt-formatted-string[title]')?.title,
-      () => document.querySelector('yt-formatted-string')?.textContent,
-      () => document.querySelector('h1.chakra-text')?.textContent,
-      () => document.querySelector('span.inlineFree')?.textContent,
-      () => document.querySelector('h1.main-h1')?.textContent,
+      // First try Media Session (most reliable when available)
+      () => navigator.mediaSession?.metadata?.title,
 
-      // Generic patterns
-      () => document.querySelector('h1')?.textContent,
-      () => document.querySelector('h2')?.textContent,
-      () => document.querySelector('.title')?.textContent,
-      () => document.querySelector('[class*="title"]')?.textContent,
+      // Then video element attributes
+      () => video.title,
+      () => video.getAttribute('aria-label'),
+      () => video.getAttribute('alt'),
 
-      // Meta tags
+      // Look in parent containers for title elements
+      () => {
+        let parent = video.parentElement;
+        for (let i = 0; i < 3 && parent; i++) {
+          const titleEl = parent.querySelector('h1, h2, h3, .title, [class*="title"]:not([class*="sub"])');
+          if (titleEl && titleEl.textContent.trim().length > 3) {
+            return titleEl.textContent.trim();
+          }
+          parent = parent.parentElement;
+        }
+        return null;
+      },
+
+      // Try meta tags
       () => document.querySelector('meta[property="og:title"]')?.content,
       () => document.querySelector('meta[name="title"]')?.content,
 
-      // Document title (cleaned)
-      () => {
-        const title = document.title;
-        return title
-            .replace(' - YouTube', '')
-            .replace(' on Vimeo', '')
-            .replace(' - Pornhub.com', '')
-            .replace(/ \| .+$/, '')
-            .trim();
-      }
+      // Fallback to cleaned page title
+      () => this.cleanPageTitle(document.title)
     ];
 
     for (const method of methods) {
       try {
         const result = method();
-        if (result && result.trim().length > 3) {
+        if (result && result.trim().length > 3 && !this.isBadTitle(result.trim())) {
+          console.log('📝 VIBRARY: Found title via method:', result.trim());
           return result.trim();
         }
       } catch (e) {
@@ -532,163 +367,328 @@ class SmartVideoDetector {
       }
     }
 
+    console.log('❌ VIBRARY: No valid title found');
     return null;
   }
 
-  getThumbnail(videoElement) {
-    // Try multiple thumbnail sources
-    if (videoElement?.poster) return videoElement.poster;
+  async extractVideoThumbnail(video) {
+    // Try multiple thumbnail sources - this is the improved logic!
 
-    const url = window.location.href;
-
-    // YouTube thumbnail
-    if (this.isYouTube(url)) {
-      const videoId = this.getYouTubeVideoId(url);
-      if (videoId) return `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`;
+    // First try video poster
+    if (video.poster) {
+      console.log('🖼️ VIBRARY: Using video poster');
+      return video.poster;
     }
 
-    // Generic thumbnail selectors
-    const thumb = document.querySelector('meta[property="og:image"]')?.content ||
-        document.querySelector('.video-thumbnail img')?.src ||
-        document.querySelector('[data-thumb]')?.dataset.thumb;
+    // Try Media Session artwork
+    const artwork = navigator.mediaSession?.metadata?.artwork;
+    if (artwork && artwork.length > 0) {
+      console.log('🖼️ VIBRARY: Using Media Session artwork');
+      // Get highest resolution artwork
+      const best = artwork.reduce((prev, current) => {
+        const prevSize = parseInt(prev.sizes?.split('x')[0] || '0');
+        const currentSize = parseInt(current.sizes?.split('x')[0] || '0');
+        return currentSize > prevSize ? current : prev;
+      });
+      return best.src;
+    }
 
-    return thumb || '';
+    // Try meta tags
+    const ogImage = document.querySelector('meta[property="og:image"]')?.content;
+    if (ogImage) {
+      console.log('🖼️ VIBRARY: Using og:image');
+      return ogImage;
+    }
+
+    // Try to capture current video frame (THIS IS THE GAME CHANGER!)
+    if (video.readyState >= 2 && video.videoWidth > 0) {
+      try {
+        console.log('🖼️ VIBRARY: Attempting video frame capture');
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.min(video.videoWidth, 480);
+        canvas.height = Math.min(video.videoHeight, 270);
+
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const thumbnail = canvas.toDataURL('image/jpeg', 0.8);
+        console.log('✅ VIBRARY: Video frame captured successfully');
+        return thumbnail;
+      } catch (error) {
+        console.log('❌ VIBRARY: Could not capture video frame:', error.message);
+      }
+    }
+
+    console.log('📭 VIBRARY: No thumbnail found');
+    return '';
   }
 
-  // Platform detection methods
-  isVideoURL(url) {
-    return this.isYouTube(url) || this.isVimeo(url) || this.isPornHub(url) ||
-        url.includes('dailymotion.com') || url.includes('twitch.tv');
+  isBadTitle(title) {
+    if (!title || title.length < 2) return true;
+
+    // Be more specific about bad titles to avoid false positives
+    const badPatterns = [
+      /^(loading|untitled|player|debug\s*info?)$/i,
+      /^(error|404|403|500)$/i,
+      /^\s*-?\s*$/,
+      /^(undefined|null)$/i,
+      /^(home|homepage|main\s*page)$/i,
+      /^(video|watch|play)$/i
+    ];
+
+    const result = badPatterns.some(pattern => pattern.test(title.trim()));
+    if (result) {
+      console.log('🚫 VIBRARY: Filtered bad title:', title);
+    }
+    return result;
   }
 
-  isYouTube(url) {
-    return url.includes('youtube.com/watch') || url.includes('youtu.be/');
+  setupPictureInPictureDetection() {
+    console.log('📺 VIBRARY: Setting up Picture-in-Picture detection');
+
+    document.addEventListener('enterpictureinpicture', (event) => {
+      console.log('📺✅ VIBRARY: PiP entered');
+      this.processVideoFromPiP(event.target);
+    });
+
+    document.addEventListener('leavepictureinpicture', (event) => {
+      console.log('📺 VIBRARY: PiP exited');
+      this.processVideoFromPiP(event.target);
+    });
+
+    if (document.pictureInPictureElement) {
+      console.log('📺 VIBRARY: Found existing PiP video');
+      this.processVideoFromPiP(document.pictureInPictureElement);
+    }
   }
 
-  isVimeo(url) {
-    return url.includes('vimeo.com/') && /\d+/.test(url);
+  processVideoFromMediaSession(metadata) {
+    try {
+      console.log('🎵 VIBRARY: Processing media session video');
+
+      const title = this.buildTitle(metadata);
+      const thumbnail = this.extractThumbnail(metadata);
+
+      const videoData = {
+        id: this.generateId(title + window.location.href),
+        url: window.location.href,
+        title: title,
+        thumbnail: thumbnail,
+        platform: this.detectPlatform(window.location.href),
+        source: 'chrome-media-session',
+        watchedAt: Date.now(),
+        rating: 0
+      };
+
+      console.log('📋 VIBRARY: Created video data:', videoData);
+      this.recordVideo(videoData);
+
+    } catch (error) {
+      console.error('💥 VIBRARY: Error processing media session video:', error);
+    }
   }
 
-  isPornHub(url) {
-    return url.includes('pornhub.com/view_video');
+  processVideoFromPiP(videoElement) {
+    try {
+      console.log('📺 VIBRARY: Processing PiP video');
+
+      const title = this.extractPiPTitle(videoElement);
+
+      if (!title || title.length < 2) {
+        console.log('❌ VIBRARY: PiP video has no valid title');
+        return;
+      }
+
+      const videoData = {
+        id: this.generateId(title + window.location.href),
+        url: window.location.href,
+        title: title,
+        thumbnail: videoElement.poster || '',
+        platform: this.detectPlatform(window.location.href),
+        source: 'chrome-pip',
+        watchedAt: Date.now(),
+        rating: 0
+      };
+
+      console.log('📋 VIBRARY: Created PiP video data:', videoData);
+      this.recordVideo(videoData);
+
+    } catch (error) {
+      console.error('💥 VIBRARY: Error processing PiP video:', error);
+    }
   }
 
-  getYouTubeVideoId(url) {
-    const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
-    return match ? match[1] : null;
+  buildTitle(metadata) {
+    const title = metadata.title;
+    const artist = metadata.artist;
+
+    if (artist && artist !== title && title.indexOf(artist) === -1) {
+      return artist + ' - ' + title;
+    }
+
+    return title;
   }
 
-  // URL-based extraction methods
-  extractYouTubeFromURL(url) {
-    const videoId = this.getYouTubeVideoId(url);
-    if (!videoId) return null;
-
-    const title = this.getTitle();
-    if (!title) return null;
-
-    return {
-      id: `yt_${videoId}`,
-      url: `https://www.youtube.com/watch?v=${videoId}`,
-      title: title,
-      thumbnail: `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`,
-      platform: 'youtube',
-      videoId: videoId,
-      watchedAt: Date.now(),
-      rating: 0
-    };
+  extractThumbnail(metadata) {
+    if (metadata.artwork && metadata.artwork.length > 0) {
+      return metadata.artwork[0].src;
+    }
+    return '';
   }
 
-  extractVimeoFromURL(url) {
-    const match = url.match(/vimeo\.com\/(\d+)/);
-    if (!match) return null;
+  extractPiPTitle(videoElement) {
+    if (videoElement.title && videoElement.title.length > 2) {
+      return videoElement.title;
+    }
 
-    const videoId = match[1];
-    const title = this.getTitle();
-    if (!title) return null;
+    const ariaLabel = videoElement.getAttribute('aria-label');
+    if (ariaLabel) {
+      return ariaLabel;
+    }
 
-    return {
-      id: `vimeo_${videoId}`,
-      url: `https://vimeo.com/${videoId}`,
-      title: title,
-      thumbnail: '',
-      platform: 'vimeo',
-      videoId: videoId,
-      watchedAt: Date.now(),
-      rating: 0
-    };
+    return this.cleanPageTitle(document.title);
   }
 
-  extractPornHubFromURL(url) {
-    const match = url.match(/viewkey=([a-f0-9]+)/);
-    const videoId = match ? match[1] : null;
-
-    const title = this.getTitle();
-    if (!title) return null;
-
-    return {
-      id: videoId ? `ph_${videoId}` : this.generateId(url + title),
-      url: url,
-      title: title,
-      thumbnail: this.getThumbnail(),
-      platform: 'pornhub',
-      videoId: videoId,
-      watchedAt: Date.now(),
-      rating: 0
-    };
+  cleanPageTitle(title) {
+    return title
+        .replace(' - YouTube', '')
+        .replace(' on Vimeo', '')
+        .replace(' - Pornhub.com', '')
+        .replace(/ - [^-]*$/, '')
+        .replace(/ \| [^|]*$/, '')
+        .trim();
   }
 
   detectPlatform(url) {
-    if (this.isYouTube(url)) return 'youtube';
-    if (this.isVimeo(url)) return 'vimeo';
-    if (this.isPornHub(url)) return 'pornhub';
-    if (url.includes('dailymotion.com')) return 'dailymotion';
-    if (url.includes('twitch.tv')) return 'twitch';
+    if (url.indexOf('youtube.com') !== -1 || url.indexOf('youtu.be') !== -1) return 'youtube';
+    if (url.indexOf('vimeo.com') !== -1) return 'vimeo';
+    if (url.indexOf('pornhub.com') !== -1) return 'pornhub';
+    if (url.indexOf('dailymotion.com') !== -1) return 'dailymotion';
+    if (url.indexOf('twitch.tv') !== -1) return 'twitch';
     return 'generic';
   }
 
-  generateId(input) {
-    return btoa(encodeURIComponent(input)).replace(/[^a-zA-Z0-9]/g, '').substring(0, 20);
+  generateVideoKey(title, url) {
+    // Create a smart key that handles duplicates better
+
+    // For YouTube, extract video ID for better deduplication
+    if (url.includes('youtube.com') || url.includes('youtu.be')) {
+      const videoId = this.extractYouTubeVideoId(url);
+      if (videoId) {
+        return `youtube:${videoId}`;
+      }
+    }
+
+    // For other sites, normalize URL and title
+    const normalizedUrl = this.normalizeUrl(url);
+    const normalizedTitle = this.normalizeTitle(title);
+
+    return `${normalizedUrl}::${normalizedTitle}`;
+  }
+
+  extractYouTubeVideoId(url) {
+    // Extract YouTube video ID from various URL formats
+    const patterns = [
+      /youtube\.com\/watch\?v=([a-zA-Z0-9_-]{11})/,
+      /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
+      /youtu\.be\/([a-zA-Z0-9_-]{11})/
+    ];
+
+    for (const pattern of patterns) {
+      const match = url.match(pattern);
+      if (match) return match[1];
+    }
+    return null;
+  }
+
+  normalizeUrl(url) {
+    // Remove query params and normalize URL
+    try {
+      const urlObj = new URL(url);
+      return `${urlObj.hostname}${urlObj.pathname}`;
+    } catch (e) {
+      return url;
+    }
+  }
+
+  normalizeTitle(title) {
+    // Normalize title for better duplicate detection
+    return title
+        .toLowerCase()
+        .replace(/[^\w\s]/g, '') // Remove special characters
+        .replace(/\s+/g, ' ')    // Normalize whitespace
+        .trim();
+  }
+
+  isSimilarTitle(title1, title2) {
+    // Check if titles are similar (one is subset of other)
+    const norm1 = this.normalizeTitle(title1);
+    const norm2 = this.normalizeTitle(title2);
+
+    // If one title contains the other, they're similar
+    return norm1.includes(norm2) || norm2.includes(norm1);
   }
 
   async recordVideo(videoData) {
     try {
-      console.log('💾 VIBRARY: Recording video detected by Chrome:', {
-        id: videoData.id,
-        title: videoData.title,
-        platform: videoData.platform,
-        source: videoData.source,
-        url: videoData.url
-      });
+      console.log('💾 VIBRARY: Recording video:', videoData.title);
 
       const result = await chrome.storage.local.get('videos');
       const videos = result.videos || {};
 
-      if (videos[videoData.id]) {
-        console.log('📼 VIBRARY: Video already exists in storage:', videoData.id);
+      // Check if already exists in storage using smart deduplication
+      const existingKey = this.findExistingVideo(videoData, videos);
+      if (existingKey) {
+        console.log('📼 VIBRARY: Similar video already in storage:', existingKey);
         return;
       }
 
       videos[videoData.id] = videoData;
       await chrome.storage.local.set({ videos });
 
-      console.log('✅ VIBRARY: Video recorded successfully via Chrome detection!');
-      console.log('📊 VIBRARY: Total videos in library:', Object.keys(videos).length);
-
-      // Show what Chrome helped us capture
-      console.table({
-        'Video ID': videoData.id,
-        'Title': videoData.title,
-        'Platform': videoData.platform,
-        'Detection Method': videoData.source || 'chrome-native',
-        'Has Thumbnail': videoData.thumbnail ? 'Yes' : 'No',
-        'URL': videoData.url
-      });
+      console.log('✅ VIBRARY: Video recorded successfully!');
+      console.log('📊 VIBRARY: Total videos:', Object.keys(videos).length);
 
     } catch (error) {
       console.error('💥 VIBRARY: Recording failed:', error);
     }
   }
+
+  findExistingVideo(newVideo, existingVideos) {
+    // Check if this video already exists in storage
+    for (const [id, existingVideo] of Object.entries(existingVideos)) {
+      // For YouTube, check video ID
+      if (newVideo.platform === 'youtube' && existingVideo.platform === 'youtube') {
+        const newVideoId = this.extractYouTubeVideoId(newVideo.url);
+        const existingVideoId = this.extractYouTubeVideoId(existingVideo.url);
+        if (newVideoId && existingVideoId && newVideoId === existingVideoId) {
+          return id;
+        }
+      }
+
+      // For other platforms, check URL and similar titles
+      if (this.normalizeUrl(newVideo.url) === this.normalizeUrl(existingVideo.url) &&
+          this.isSimilarTitle(newVideo.title, existingVideo.title)) {
+        return id;
+      }
+    }
+    return null;
+  }
+
+  destroy() {
+    if (this.mediaCheckInterval) {
+      clearInterval(this.mediaCheckInterval);
+    }
+  }
 }
 
-// Initialize the smart detector
-new SmartVideoDetector();
+// Initialize
+console.log('🚀 VIBRARY: Starting detector...');
+const vibraryDetector = new ChromeNativeVideoDetector();
+
+// Cleanup
+window.addEventListener('beforeunload', () => {
+  if (vibraryDetector) {
+    vibraryDetector.destroy();
+  }
+});

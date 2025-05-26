@@ -7,12 +7,40 @@ class Vibrary {
     this.currentVideo = null;
     this.selectedRating = 0;
     this.selectedPlaylist = null;
+    this.hideNSFW = false;
+    this.blacklistEnabled = true; // Enabled by default
+    this.blacklistedDomains = [];
+
+    // NSFW domain blacklist (separate from user blacklist)
+    this.nsfwDomains = [
+      'pornhub.com',
+      'xvideos.com',
+      'xnxx.com',
+      'youporn.com',
+      'redtube.com',
+      'tube8.com',
+      'spankbang.com',
+      'xhamster.com',
+      'beeg.com',
+      'drtuber.com',
+      'thumbzilla.com',
+      'nuvid.com',
+      'porntrex.com',
+      'eporner.com',
+      'fapdu.com',
+      'gotporn.com',
+      'analdin.com',
+      'vjav.com',
+      'javhub.net',
+      'javlibrary.com'
+    ];
 
     this.init();
   }
 
   async init() {
     await this.loadData();
+    await this.loadSettings();
     this.bindEvents();
     this.setupAutoRefresh();
     this.render();
@@ -32,6 +60,69 @@ class Vibrary {
       console.error('Error loading data:', error);
       this.videos = {};
       this.playlists = {};
+    }
+  }
+
+  async loadSettings() {
+    try {
+      const result = await chrome.storage.local.get(['hideNSFW', 'blacklistEnabled', 'blacklistedDomains']);
+      this.hideNSFW = result.hideNSFW || false;
+      this.blacklistEnabled = result.blacklistEnabled !== false; // Default to true
+      this.blacklistedDomains = result.blacklistedDomains || [];
+
+      this.updateNSFWToggle();
+      this.updateBlacklistToggle();
+    } catch (error) {
+      console.error('Error loading settings:', error);
+    }
+  }
+
+  async saveSettings() {
+    try {
+      await chrome.storage.local.set({
+        hideNSFW: this.hideNSFW,
+        blacklistEnabled: this.blacklistEnabled,
+        blacklistedDomains: this.blacklistedDomains
+      });
+    } catch (error) {
+      console.error('Error saving settings:', error);
+    }
+  }
+
+  updateNSFWToggle() {
+    const checkbox = document.getElementById('nsfw-checkbox');
+    checkbox.classList.toggle('checked', this.hideNSFW);
+  }
+
+  updateBlacklistToggle() {
+    const toggle = document.getElementById('blacklist-toggle');
+    const checkbox = document.getElementById('blacklist-checkbox');
+
+    if (toggle) toggle.classList.toggle('enabled', this.blacklistEnabled);
+    if (checkbox) checkbox.classList.toggle('checked', this.blacklistEnabled);
+  }
+
+  isNSFWVideo(video) {
+    if (!video.url) return false;
+
+    try {
+      const hostname = new URL(video.url).hostname.toLowerCase().replace('www.', '');
+      return this.nsfwDomains.some(domain => hostname.includes(domain));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  isBlacklistedVideo(video) {
+    if (!this.blacklistEnabled || !video.url) return false;
+
+    try {
+      const hostname = new URL(video.url).hostname.toLowerCase().replace('www.', '');
+      return this.blacklistedDomains.some(domain =>
+          hostname.includes(domain.toLowerCase().trim())
+      );
+    } catch (e) {
+      return false;
     }
   }
 
@@ -78,7 +169,7 @@ class Vibrary {
 
   isBadTitle(title) {
     if (!title) return true;
-    return /^(shorts|comments?\s*\d*|\d+\s*comments?|loading|watch|video|player)$/i.test(title.trim());
+    return /^(shorts|comments?\s*\d*|\d+\s*comments?|loading|watch|video|player|debug\s*info)$/i.test(title.trim());
   }
 
   async saveData() {
@@ -110,6 +201,27 @@ class Vibrary {
       tab.addEventListener('click', () => this.switchTab(tab.dataset.tab));
     });
 
+    // NSFW Toggle
+    document.getElementById('nsfw-toggle').addEventListener('click', () => this.toggleNSFW());
+
+    // Settings Menu
+    document.getElementById('settings-button').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleSettingsMenu();
+    });
+
+    // Settings Menu Items
+    document.querySelectorAll('.settings-menu-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const action = item.dataset.action;
+        this.handleSettingsAction(action);
+      });
+    });
+
+    // Close settings menu when clicking outside
+    document.addEventListener('click', () => this.closeSettingsMenu());
+
     // Controls
     document.getElementById('rating-filter').addEventListener('change', () => this.render());
     document.getElementById('sort-by').addEventListener('change', () => this.render());
@@ -122,12 +234,74 @@ class Vibrary {
     document.getElementById('delete-playlist-btn').addEventListener('click', () => this.deletePlaylist());
     document.getElementById('playlist-name').addEventListener('click', () => this.renamePlaylist());
 
-    // Data controls
-    document.getElementById('export-data').addEventListener('click', () => this.exportData());
-    document.getElementById('import-data').addEventListener('click', () => this.showImportModal());
-
     // Modals
     this.bindModalEvents();
+  }
+
+  toggleSettingsMenu() {
+    const menu = document.getElementById('settings-menu');
+    menu.classList.toggle('active');
+  }
+
+  closeSettingsMenu() {
+    const menu = document.getElementById('settings-menu');
+    menu.classList.remove('active');
+  }
+
+  handleSettingsAction(action) {
+    this.closeSettingsMenu();
+
+    switch (action) {
+      case 'export':
+        this.exportData();
+        break;
+      case 'import':
+        this.showImportModal();
+        break;
+      case 'blacklist':
+        this.showBlacklistModal();
+        break;
+    }
+  }
+
+  showBlacklistModal() {
+    // Populate textarea with current blacklist
+    const textarea = document.getElementById('blacklist-textarea');
+    textarea.value = this.blacklistedDomains.join('\n');
+
+    // Update checkbox state
+    this.updateBlacklistToggle();
+
+    this.showModal('blacklist-modal');
+  }
+
+  async saveBlacklist() {
+    const textarea = document.getElementById('blacklist-textarea');
+    const domains = textarea.value
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0);
+
+    this.blacklistedDomains = domains;
+    await this.saveSettings();
+
+    console.log('VIBRARY: Blacklist updated:', domains);
+    this.closeModal('blacklist-modal');
+    this.render(); // Re-render to apply blacklist
+  }
+
+  async toggleBlacklist() {
+    this.blacklistEnabled = !this.blacklistEnabled;
+    this.updateBlacklistToggle();
+    await this.saveSettings();
+    this.render(); // Re-render to apply changes
+  }
+
+  async toggleNSFW() {
+    this.hideNSFW = !this.hideNSFW;
+    this.updateNSFWToggle();
+    await this.saveSettings();
+    this.render(); // Re-render to apply filter
   }
 
   bindModalEvents() {
@@ -143,6 +317,11 @@ class Vibrary {
     // Import modal
     document.getElementById('import-confirm-btn').addEventListener('click', () => this.importData());
     document.getElementById('import-cancel-btn').addEventListener('click', () => this.closeModal('import-modal'));
+
+    // Blacklist modal
+    document.getElementById('blacklist-save-btn').addEventListener('click', () => this.saveBlacklist());
+    document.getElementById('blacklist-cancel-btn').addEventListener('click', () => this.closeModal('blacklist-modal'));
+    document.getElementById('blacklist-enable').addEventListener('click', () => this.toggleBlacklist());
 
     // Star rating
     document.querySelectorAll('.star').forEach((star, index) => {
@@ -200,10 +379,20 @@ class Vibrary {
 
     let videos = Object.entries(this.videos).map(([id, video]) => ({ id, ...video }));
 
-    // Filter
+    // Filter by rating
     if (ratingFilter !== 'all') {
       const rating = parseInt(ratingFilter);
       videos = videos.filter(v => v.rating === rating);
+    }
+
+    // Filter NSFW if enabled
+    if (this.hideNSFW) {
+      videos = videos.filter(v => !this.isNSFWVideo(v));
+    }
+
+    // Filter blacklisted domains if enabled
+    if (this.blacklistEnabled) {
+      videos = videos.filter(v => !this.isBlacklistedVideo(v));
     }
 
     // Sort
@@ -217,11 +406,72 @@ class Vibrary {
     this.renderVideoList(container, videos, { showDelete: true });
   }
 
-  renderVideoList(container, videos, options = {}) {
-    if (videos.length === 0) {
+  renderPlaylistsList() {
+    const container = document.getElementById('playlist-list');
+    const playlists = Object.entries(this.playlists);
+
+    if (playlists.length === 0) {
       container.innerHTML = `
         <div class="empty-state">
-          <h3>No Videos Found</h3>
+          <h3>No Playlists Yet</h3>
+          <p>Create your first playlist to organize your videos</p>
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = playlists.map(([name, videoIds]) => {
+      // Get first video for thumbnail
+      let thumbnail = '📁';
+      let firstVideo = null;
+
+      if (videoIds.length > 0) {
+        // Find first video that exists and isn't blacklisted
+        for (const videoId of videoIds) {
+          const video = this.videos[videoId];
+          if (video && !this.isBlacklistedVideo(video)) {
+            firstVideo = video;
+            break;
+          }
+        }
+
+        if (firstVideo?.thumbnail) {
+          thumbnail = `<img src="${firstVideo.thumbnail}" alt="" loading="lazy">`;
+        }
+      }
+
+      // Count non-blacklisted videos
+      const visibleVideoCount = videoIds.filter(id => {
+        const video = this.videos[id];
+        return video && !this.isBlacklistedVideo(video);
+      }).length;
+
+      return `
+        <div class="playlist-item" data-action="show-playlist" data-playlist="${this.escapeHtml(name)}">
+          <div class="playlist-thumbnail">
+            ${thumbnail}
+          </div>
+          <div class="playlist-info">
+            <div class="playlist-name">${this.escapeHtml(name)}</div>
+            <div class="playlist-count">${visibleVideoCount} videos</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    container.querySelectorAll('[data-action="show-playlist"]').forEach(item => {
+      item.addEventListener('click', () => this.showPlaylist(item.dataset.playlist));
+    });
+  }
+
+  renderVideoList(container, videos, options = {}) {
+    if (videos.length === 0) {
+      const message = this.hideNSFW ?
+          'No videos found (NSFW content hidden)' :
+          'No videos found';
+      container.innerHTML = `
+        <div class="empty-state">
+          <h3>${message}</h3>
           <p>Videos will appear here as you watch them across the web</p>
         </div>
       `;
@@ -232,15 +482,17 @@ class Vibrary {
       const date = new Date(video.watchedAt).toLocaleDateString();
       const rating = video.rating > 0 ? '★'.repeat(video.rating) + '☆'.repeat(5 - video.rating) : 'Unrated';
       const timeAgo = this.getTimeAgo(video.watchedAt);
+      const isNSFW = this.isNSFWVideo(video);
+      const nsfwClass = isNSFW && this.hideNSFW ? 'nsfw-hidden' : '';
 
       return `
-        <div class="video-item" data-video-id="${video.id}">
+        <div class="video-item ${nsfwClass}" data-video-id="${video.id}">
           <div class="video-header" data-action="open-video" data-url="${this.escapeHtml(video.url)}">
             <div class="video-thumbnail">
-              ${video.thumbnail ? `<img src="${video.thumbnail}" alt="" loading="lazy">` : '▶'}
+              ${video.thumbnail ? `<img src="${video.thumbnail}" alt="" loading="lazy">` : '📺'}
             </div>
             <div class="video-info">
-              <div class="video-title">${this.escapeHtml(video.title)}</div>
+              <div class="video-title">${this.escapeHtml(video.title)}${isNSFW ? ' 🔞' : ''}</div>
               <div class="video-url">Click to open • ${timeAgo}</div>
             </div>
           </div>
