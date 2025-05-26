@@ -1,20 +1,107 @@
-<!-- popup.html -->
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8"/>
-    <meta name="viewport" content="width=device-width,initial-scale=1"/>
-    <title>VIBRARY</title>
-    <link rel="stylesheet" href="popup.css"/>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VIBRARY</title>
+  <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-<div class="tabs">
-    <button class="tab active" data-view="history">History</button>
-    <button class="tab"      data-view="playlists">Playlists</button>
+<div class="header">
+  <h1>VIBRARY</h1>
+  <div class="tabs">
+    <button class="tab active" data-tab="history">History</button>
+    <button class="tab" data-tab="playlists">Playlists</button>
+  </div>
 </div>
 
-<div id="history" class="view"></div>
-<div id="playlists" class="view" style="display:none;"></div>
+<div class="content">
+  <div id="history" class="tab-content active">
+    <div class="controls">
+      <select id="rating-filter">
+        <option value="all">All Videos</option>
+        <option value="5">★★★★★</option>
+        <option value="4">★★★★</option>
+        <option value="3">★★★</option>
+        <option value="2">★★</option>
+        <option value="1">★</option>
+        <option value="0">Unrated</option>
+      </select>
+      <select id="sort-by">
+        <option value="date">Recent First</option>
+        <option value="rating">By Rating</option>
+      </select>
+      <button id="clear-history" class="btn-danger btn-small">Clear All</button>
+    </div>
+    <div id="history-list" class="video-list"></div>
+  </div>
+
+  <div id="playlists" class="tab-content">
+    <div class="playlist-header">
+      <button id="new-playlist" class="btn-primary">+ New Playlist</button>
+      <div class="data-controls">
+        <button id="export-data" class="btn-secondary btn-small">Export</button>
+        <button id="import-data" class="btn-secondary btn-small">Import</button>
+      </div>
+    </div>
+    <div id="playlist-list" class="playlist-list"></div>
+  </div>
+
+  <div id="playlist-view" class="tab-content">
+    <div class="playlist-header">
+      <button id="back-btn" class="btn-back">← Back</button>
+      <h2 id="playlist-name" class="editable-title" title="Click to rename"></h2>
+      <button id="delete-playlist-btn" class="btn-danger">Delete</button>
+    </div>
+    <div id="playlist-videos" class="video-list"></div>
+  </div>
+</div>
+
+<!-- Rating Modal -->
+<div id="rating-modal" class="modal">
+  <div class="modal-content">
+    <h3>Rate Video</h3>
+    <p id="rating-video-title"></p>
+    <div class="star-rating">
+      <span class="star" data-rating="1">★</span>
+      <span class="star" data-rating="2">★</span>
+      <span class="star" data-rating="3">★</span>
+      <span class="star" data-rating="4">★</span>
+      <span class="star" data-rating="5">★</span>
+    </div>
+    <div class="modal-actions">
+      <button id="save-rating-btn" class="btn-primary">Save</button>
+      <button id="cancel-rating-btn" class="btn-secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Playlist Modal -->
+<div id="playlist-modal" class="modal">
+  <div class="modal-content">
+    <h3>Add to Playlist</h3>
+    <p id="playlist-video-title"></p>
+    <button id="create-new-playlist" class="btn-primary btn-small" style="margin-bottom: 12px;">+ Create New Playlist</button>
+    <div id="playlist-options" class="playlist-options"></div>
+    <div class="modal-actions">
+      <button id="add-to-playlist-btn" class="btn-primary">Add</button>
+      <button id="cancel-playlist-btn" class="btn-secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Import Modal -->
+<div id="import-modal" class="modal">
+  <div class="modal-content">
+    <h3>Import Data</h3>
+    <p>Paste your exported VIBRARY data below:</p>
+    <textarea id="import-data-text" rows="6" style="width: 100%; margin: 12px 0; padding: 8px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px;"></textarea>
+    <div class="modal-actions">
+      <button id="import-confirm-btn" class="btn-primary">Import</button>
+      <button id="import-cancel-btn" class="btn-secondary">Cancel</button>
+    </div>
+  </div>
+</div>
 
 <script src="popup.js"></script>
 </body>
