@@ -14,6 +14,7 @@ class Vibrary {
   async init() {
     await this.loadData();
     this.bindEvents();
+    this.setupAutoRefresh();
     this.render();
   }
 
@@ -22,12 +23,62 @@ class Vibrary {
       const result = await chrome.storage.local.get(['videos', 'playlists']);
       this.videos = result.videos || {};
       this.playlists = result.playlists || {};
-      console.log('VIBRARY: Loaded', Object.keys(this.videos).length, 'videos and', Object.keys(this.playlists).length, 'playlists');
+
+      // Clean up any duplicate YouTube videos with bad titles
+      this.cleanupDuplicates();
+
+      console.log('VIBRARY: Loaded', Object.keys(this.videos).length, 'videos');
     } catch (error) {
       console.error('Error loading data:', error);
       this.videos = {};
       this.playlists = {};
     }
+  }
+
+  cleanupDuplicates() {
+    const youtubeVideos = {};
+    const toDelete = [];
+
+    // Group YouTube videos by video ID
+    Object.entries(this.videos).forEach(([id, video]) => {
+      if (video.platform === 'youtube' && video.videoId) {
+        if (!youtubeVideos[video.videoId]) {
+          youtubeVideos[video.videoId] = [];
+        }
+        youtubeVideos[video.videoId].push({ id, ...video });
+      }
+    });
+
+    // For each YouTube video, keep only the one with the best title
+    Object.values(youtubeVideos).forEach(duplicates => {
+      if (duplicates.length > 1) {
+        // Sort by title quality (avoid "Shorts", "Comments", etc.)
+        duplicates.sort((a, b) => {
+          const aBad = this.isBadTitle(a.title);
+          const bBad = this.isBadTitle(b.title);
+          if (aBad && !bBad) return 1;
+          if (!aBad && bBad) return -1;
+          return b.title.length - a.title.length; // Prefer longer titles
+        });
+
+        // Mark all but the best one for deletion
+        duplicates.slice(1).forEach(video => {
+          toDelete.push(video.id);
+        });
+      }
+    });
+
+    // Delete duplicates
+    if (toDelete.length > 0) {
+      console.log('VIBRARY: Cleaning up', toDelete.length, 'duplicate videos');
+      toDelete.forEach(id => delete this.videos[id]);
+      this.saveData();
+    }
+  }
+
+  isBadTitle(title) {
+    if (!title) return true;
+    return /^(shorts|comments?\s*\d*|\d+\s*comments?|loading|watch|video|player)$/i.test(title.trim());
   }
 
   async saveData() {
@@ -41,34 +92,52 @@ class Vibrary {
     }
   }
 
+  setupAutoRefresh() {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === 'local' && changes.videos) {
+        this.videos = changes.videos.newValue || {};
+        this.cleanupDuplicates();
+        if (this.currentTab === 'history') {
+          this.renderHistory();
+        }
+      }
+    });
+  }
+
   bindEvents() {
     // Tab switching
     document.querySelectorAll('.tab').forEach(tab => {
       tab.addEventListener('click', () => this.switchTab(tab.dataset.tab));
     });
 
-    // History controls
+    // Controls
     document.getElementById('rating-filter').addEventListener('change', () => this.render());
     document.getElementById('sort-by').addEventListener('change', () => this.render());
-    document.getElementById('clear-history').addEventListener('click', () => this.clearAllHistory());
+    document.getElementById('refresh-history').addEventListener('click', () => this.refreshHistory());
+    document.getElementById('clear-history').addEventListener('click', () => this.clearHistory());
 
-    // Playlist controls
+    // Playlists
     document.getElementById('new-playlist').addEventListener('click', () => this.createPlaylist());
     document.getElementById('back-btn').addEventListener('click', () => this.showPlaylists());
-    document.getElementById('delete-playlist-btn').addEventListener('click', () => this.deleteCurrentPlaylist());
-    document.getElementById('playlist-name').addEventListener('click', () => this.renameCurrentPlaylist());
+    document.getElementById('delete-playlist-btn').addEventListener('click', () => this.deletePlaylist());
+    document.getElementById('playlist-name').addEventListener('click', () => this.renamePlaylist());
 
     // Data controls
     document.getElementById('export-data').addEventListener('click', () => this.exportData());
     document.getElementById('import-data').addEventListener('click', () => this.showImportModal());
 
-    // Modal controls
+    // Modals
+    this.bindModalEvents();
+  }
+
+  bindModalEvents() {
+    // Rating modal
     document.getElementById('save-rating-btn').addEventListener('click', () => this.saveRating());
     document.getElementById('cancel-rating-btn').addEventListener('click', () => this.closeModal('rating-modal'));
-    document.getElementById('add-to-playlist-btn').addEventListener('click', () => this.addVideoToPlaylist());
-    document.getElementById('cancel-playlist-btn').addEventListener('click', () => this.closeModal('playlist-modal'));
 
-    // New playlist in modal
+    // Playlist modal
+    document.getElementById('add-to-playlist-btn').addEventListener('click', () => this.addToPlaylist());
+    document.getElementById('cancel-playlist-btn').addEventListener('click', () => this.closeModal('playlist-modal'));
     document.getElementById('create-new-playlist').addEventListener('click', () => this.createPlaylistInModal());
 
     // Import modal
@@ -86,7 +155,7 @@ class Vibrary {
 
     document.querySelector('.star-rating').addEventListener('mouseleave', () => this.updateStars());
 
-    // Modal background clicks
+    // Close modals on background click
     document.querySelectorAll('.modal').forEach(modal => {
       modal.addEventListener('click', (e) => {
         if (e.target === modal) this.closeModal(modal.id);
@@ -97,7 +166,6 @@ class Vibrary {
   switchTab(tab) {
     this.currentTab = tab;
 
-    // Update UI
     document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
     document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
 
@@ -132,32 +200,21 @@ class Vibrary {
 
     let videos = Object.entries(this.videos).map(([id, video]) => ({ id, ...video }));
 
-    // Filter videos
+    // Filter
     if (ratingFilter !== 'all') {
       const rating = parseInt(ratingFilter);
       videos = videos.filter(v => v.rating === rating);
     }
 
-    // Sort videos
+    // Sort
     videos.sort((a, b) => {
-      switch (sortBy) {
-        case 'rating':
-          return (b.rating || 0) - (a.rating || 0) || b.watchedAt - a.watchedAt;
-        default: // date
-          return b.watchedAt - a.watchedAt;
+      if (sortBy === 'rating') {
+        return (b.rating || 0) - (a.rating || 0) || b.watchedAt - a.watchedAt;
       }
+      return b.watchedAt - a.watchedAt;
     });
 
     this.renderVideoList(container, videos, { showDelete: true });
-  }
-
-  async clearAllHistory() {
-    if (!confirm('Delete all video history? This cannot be undone.')) return;
-
-    this.videos = {};
-    this.playlists = {};
-    await this.saveData();
-    this.render();
   }
 
   renderVideoList(container, videos, options = {}) {
@@ -165,7 +222,7 @@ class Vibrary {
       container.innerHTML = `
         <div class="empty-state">
           <h3>No Videos Found</h3>
-          <p>Videos will appear here as you watch them</p>
+          <p>Videos will appear here as you watch them across the web</p>
         </div>
       `;
       return;
@@ -174,16 +231,17 @@ class Vibrary {
     container.innerHTML = videos.map(video => {
       const date = new Date(video.watchedAt).toLocaleDateString();
       const rating = video.rating > 0 ? '★'.repeat(video.rating) + '☆'.repeat(5 - video.rating) : 'Unrated';
+      const timeAgo = this.getTimeAgo(video.watchedAt);
 
       return `
         <div class="video-item" data-video-id="${video.id}">
           <div class="video-header" data-action="open-video" data-url="${this.escapeHtml(video.url)}">
             <div class="video-thumbnail">
-              ${video.thumbnail ? `<img src="${video.thumbnail}" alt="">` : '▶'}
+              ${video.thumbnail ? `<img src="${video.thumbnail}" alt="" loading="lazy">` : '▶'}
             </div>
             <div class="video-info">
               <div class="video-title">${this.escapeHtml(video.title)}</div>
-              <div class="video-url">Click to open video</div>
+              <div class="video-url">Click to open • ${timeAgo}</div>
             </div>
           </div>
           <div class="video-meta">
@@ -200,55 +258,44 @@ class Vibrary {
       `;
     }).join('');
 
-    this.bindVideoListEvents(container);
+    this.bindVideoActions(container);
   }
 
-  bindVideoListEvents(container) {
-    // Video header clicks (open video)
-    container.querySelectorAll('[data-action="open-video"]').forEach(header => {
-      header.addEventListener('click', () => {
-        window.open(header.dataset.url, '_blank');
-      });
+  bindVideoActions(container) {
+    container.querySelectorAll('[data-action="open-video"]').forEach(el => {
+      el.addEventListener('click', () => window.open(el.dataset.url, '_blank'));
     });
 
-    // Action buttons
-    container.querySelectorAll('[data-action="rate"]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+    container.querySelectorAll('[data-action="rate"]').forEach(el => {
+      el.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.showRatingModal(btn.dataset.videoId);
+        this.showRatingModal(el.dataset.videoId);
       });
     });
 
-    container.querySelectorAll('[data-action="add-to-playlist"]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+    container.querySelectorAll('[data-action="add-to-playlist"]').forEach(el => {
+      el.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.showPlaylistModal(btn.dataset.videoId);
+        this.showPlaylistModal(el.dataset.videoId);
       });
     });
 
-    container.querySelectorAll('[data-action="remove-from-playlist"]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+    container.querySelectorAll('[data-action="remove-from-playlist"]').forEach(el => {
+      el.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.removeFromPlaylist(btn.dataset.videoId);
+        this.removeFromPlaylist(el.dataset.videoId);
       });
     });
 
-    container.querySelectorAll('[data-action="delete-video"]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+    container.querySelectorAll('[data-action="delete-video"]').forEach(el => {
+      el.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.deleteVideo(btn.dataset.videoId);
-      });
-    });
-
-    // Handle image loading errors
-    container.querySelectorAll('img').forEach(img => {
-      img.addEventListener('error', function() {
-        this.style.display = 'none';
-        this.parentNode.innerHTML = '▶';
+        this.deleteVideo(el.dataset.videoId);
       });
     });
   }
 
+  // Playlist methods
   showPlaylists() {
     this.currentPlaylist = null;
     document.getElementById('playlists').classList.add('active');
@@ -300,7 +347,7 @@ class Vibrary {
     this.renderVideoList(container, videos, { showRemove: true });
   }
 
-  // Video actions
+  // Modal methods
   showRatingModal(videoId) {
     this.currentVideo = this.videos[videoId];
     if (!this.currentVideo) return;
@@ -321,12 +368,7 @@ class Vibrary {
     }
 
     this.closeModal('rating-modal');
-
-    // Instant UI refresh
     this.render();
-    if (this.currentPlaylist) {
-      this.renderPlaylistView();
-    }
   }
 
   showPlaylistModal(videoId) {
@@ -367,7 +409,7 @@ class Vibrary {
     });
   }
 
-  async addVideoToPlaylist() {
+  async addToPlaylist() {
     if (!this.selectedPlaylist || !this.currentVideo) return;
 
     const videoId = Object.keys(this.videos).find(id => this.videos[id] === this.currentVideo);
@@ -380,29 +422,7 @@ class Vibrary {
     this.render();
   }
 
-  async removeFromPlaylist(videoId) {
-    if (!this.currentPlaylist) return;
-
-    this.playlists[this.currentPlaylist] = this.playlists[this.currentPlaylist].filter(id => id !== videoId);
-    await this.saveData();
-    this.renderPlaylistView();
-  }
-
-  async deleteVideo(videoId) {
-    if (!confirm('Delete this video from history?')) return;
-
-    delete this.videos[videoId];
-
-    // Remove from all playlists
-    Object.keys(this.playlists).forEach(playlistName => {
-      this.playlists[playlistName] = this.playlists[playlistName].filter(id => id !== videoId);
-    });
-
-    await this.saveData();
-    this.render();
-  }
-
-  // Playlist management
+  // CRUD operations
   async createPlaylist() {
     const name = prompt('Enter playlist name:');
     if (!name || this.playlists[name]) return;
@@ -418,13 +438,11 @@ class Vibrary {
 
     this.playlists[name] = [];
     await this.saveData();
-
-    // Refresh the playlist options and select the new one
     this.renderPlaylistOptions();
     this.selectPlaylist(name);
   }
 
-  async renameCurrentPlaylist() {
+  async renamePlaylist() {
     if (!this.currentPlaylist) return;
 
     const newName = prompt('Enter new playlist name:', this.currentPlaylist);
@@ -438,7 +456,7 @@ class Vibrary {
     document.getElementById('playlist-name').textContent = newName;
   }
 
-  async deleteCurrentPlaylist() {
+  async deletePlaylist() {
     if (!this.currentPlaylist || !confirm(`Delete playlist "${this.currentPlaylist}"?`)) return;
 
     delete this.playlists[this.currentPlaylist];
@@ -446,7 +464,37 @@ class Vibrary {
     this.showPlaylists();
   }
 
-  // Export/Import functionality
+  async removeFromPlaylist(videoId) {
+    if (!this.currentPlaylist) return;
+
+    this.playlists[this.currentPlaylist] = this.playlists[this.currentPlaylist].filter(id => id !== videoId);
+    await this.saveData();
+    this.renderPlaylistView();
+  }
+
+  async deleteVideo(videoId) {
+    if (!confirm('Delete this video from history?')) return;
+
+    delete this.videos[videoId];
+
+    Object.keys(this.playlists).forEach(playlistName => {
+      this.playlists[playlistName] = this.playlists[playlistName].filter(id => id !== videoId);
+    });
+
+    await this.saveData();
+    this.render();
+  }
+
+  async clearHistory() {
+    if (!confirm('Delete all video history? This cannot be undone.')) return;
+
+    this.videos = {};
+    this.playlists = {};
+    await this.saveData();
+    this.render();
+  }
+
+  // Export/Import
   async exportData() {
     const exportData = {
       videos: this.videos,
@@ -456,8 +504,6 @@ class Vibrary {
     };
 
     const dataStr = JSON.stringify(exportData, null, 2);
-
-    // Create and download file
     const blob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -466,7 +512,7 @@ class Vibrary {
     a.click();
     URL.revokeObjectURL(url);
 
-    alert(`VIBRARY data exported! ${Object.keys(this.videos).length} videos and ${Object.keys(this.playlists).length} playlists saved.`);
+    this.showNotification(`Exported ${Object.keys(this.videos).length} videos and ${Object.keys(this.playlists).length} playlists`);
   }
 
   showImportModal() {
@@ -486,91 +532,112 @@ class Vibrary {
         return;
       }
 
-      await this.mergeImportedData(importData);
+      const conflicts = this.findConflicts(importData);
+
+      if (conflicts.videos.length > 0 || conflicts.playlists.length > 0) {
+        const keepNew = confirm(
+            `Found ${conflicts.videos.length} video conflicts and ${conflicts.playlists.length} playlist conflicts.\n\n` +
+            'Click OK to keep NEW data\nClick Cancel to keep EXISTING data'
+        );
+
+        this.mergeData(importData, keepNew);
+      } else {
+        Object.assign(this.videos, importData.videos);
+        Object.assign(this.playlists, importData.playlists);
+      }
+
+      await this.saveData();
+      await this.loadData();
+      this.render();
+
       this.closeModal('import-modal');
+      this.showNotification(`Imported ${Object.keys(importData.videos).length} videos successfully`);
 
     } catch (error) {
       alert('Error parsing import data. Please check the format.');
-      console.error('Import error:', error);
     }
-  }
-
-  async mergeImportedData(importData) {
-    const conflicts = this.findConflicts(importData);
-
-    if (conflicts.videos.length > 0 || conflicts.playlists.length > 0) {
-      const choice = confirm(
-          `Found ${conflicts.videos.length} video conflicts and ${conflicts.playlists.length} playlist conflicts.\n\n` +
-          'Click OK to keep NEW data (overwrite existing)\n' +
-          'Click Cancel to keep EXISTING data (skip conflicts)'
-      );
-
-      this.mergeWithConflictResolution(importData, choice ? 'new' : 'existing');
-    } else {
-      // No conflicts, merge everything
-      Object.assign(this.videos, importData.videos);
-      Object.assign(this.playlists, importData.playlists);
-    }
-
-    await this.saveData();
-    await this.loadData(); // Refresh from storage
-    this.render();
-
-    alert(`Import complete! Added ${Object.keys(importData.videos).length} videos and ${Object.keys(importData.playlists).length} playlists.`);
   }
 
   findConflicts(importData) {
-    const videoConflicts = [];
-    const playlistConflicts = [];
-
-    // Check video conflicts (same ID, different rating or other data)
-    Object.keys(importData.videos).forEach(id => {
-      if (this.videos[id]) {
-        const existing = this.videos[id];
-        const imported = importData.videos[id];
-        if (existing.rating !== imported.rating || existing.title !== imported.title) {
-          videoConflicts.push(id);
-        }
-      }
-    });
-
-    // Check playlist conflicts
-    Object.keys(importData.playlists).forEach(name => {
-      if (this.playlists[name]) {
-        playlistConflicts.push(name);
-      }
-    });
-
+    const videoConflicts = Object.keys(importData.videos).filter(id => this.videos[id]);
+    const playlistConflicts = Object.keys(importData.playlists).filter(name => this.playlists[name]);
     return { videos: videoConflicts, playlists: playlistConflicts };
   }
 
-  mergeWithConflictResolution(importData, preference) {
-    // Merge videos
+  mergeData(importData, keepNew) {
     Object.entries(importData.videos).forEach(([id, video]) => {
-      if (!this.videos[id]) {
-        // No conflict, add new video
-        this.videos[id] = video;
-      } else if (preference === 'new') {
-        // Overwrite with imported data
+      if (!this.videos[id] || keepNew) {
         this.videos[id] = video;
       }
-      // If preference is 'existing', skip conflicted videos
     });
 
-    // Merge playlists
     Object.entries(importData.playlists).forEach(([name, videoIds]) => {
-      if (!this.playlists[name]) {
-        // No conflict, add new playlist
-        this.playlists[name] = videoIds;
-      } else if (preference === 'new') {
-        // Overwrite with imported data
+      if (!this.playlists[name] || keepNew) {
         this.playlists[name] = videoIds;
       }
-      // If preference is 'existing', skip conflicted playlists
     });
   }
 
-  // UI helpers
+  // Utility methods
+  async refreshHistory() {
+    const button = document.getElementById('refresh-history');
+    const originalText = button.textContent;
+
+    button.innerHTML = '<span style="display: inline-block; animation: spin 1s linear infinite;">⟳</span>';
+    button.disabled = true;
+
+    if (!document.getElementById('spin-styles')) {
+      const style = document.createElement('style');
+      style.id = 'spin-styles';
+      style.textContent = '@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }';
+      document.head.appendChild(style);
+    }
+
+    try {
+      const oldCount = Object.keys(this.videos).length;
+      await this.loadData();
+      const newCount = Object.keys(this.videos).length;
+
+      button.innerHTML = '✓';
+      button.style.color = 'var(--success)';
+
+      if (newCount > oldCount) {
+        this.showNotification(`Found ${newCount - oldCount} new videos!`);
+      }
+
+      this.render();
+
+      setTimeout(() => {
+        button.textContent = originalText;
+        button.style.color = '';
+        button.disabled = false;
+      }, 1500);
+
+    } catch (error) {
+      button.textContent = '✗';
+      button.style.color = 'var(--danger)';
+
+      setTimeout(() => {
+        button.textContent = originalText;
+        button.style.color = '';
+        button.disabled = false;
+      }, 2000);
+    }
+  }
+
+  getTimeAgo(timestamp) {
+    const diff = Date.now() - timestamp;
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (minutes < 1) return 'Just now';
+    if (minutes < 60) return `${minutes}m ago`;
+    if (hours < 24) return `${hours}h ago`;
+    if (days < 7) return `${days}d ago`;
+    return new Date(timestamp).toLocaleDateString();
+  }
+
   highlightStars(rating) {
     document.querySelectorAll('.star').forEach((star, index) => {
       star.classList.toggle('active', index < rating);
@@ -588,6 +655,47 @@ class Vibrary {
   closeModal(modalId) {
     document.getElementById(modalId).classList.remove('active');
     this.selectedPlaylist = null;
+  }
+
+  showNotification(message) {
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: linear-gradient(135deg, var(--success), #00cc55);
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      z-index: 10000;
+      box-shadow: 0 4px 20px rgba(0, 170, 68, 0.3);
+      animation: slideDown 0.3s ease;
+    `;
+    notification.textContent = message;
+
+    if (!document.getElementById('notification-styles')) {
+      const style = document.createElement('style');
+      style.id = 'notification-styles';
+      style.textContent = `
+        @keyframes slideDown {
+          from { transform: translateX(-50%) translateY(-100%); opacity: 0; }
+          to { transform: translateX(-50%) translateY(0); opacity: 1; }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    document.body.appendChild(notification);
+
+    setTimeout(() => {
+      if (notification.parentNode) {
+        notification.style.animation = 'slideUp 0.3s ease';
+        setTimeout(() => notification.remove(), 300);
+      }
+    }, 2500);
   }
 
   escapeHtml(text) {
