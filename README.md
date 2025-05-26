@@ -7,8 +7,8 @@
 ## 🖼️ Preview
 
 <p align="center">
-  <a href="https://github.com/AppHazard-Studios/VIBRARY/blob/main/VIBRARY_Preview.png?raw=true" target="_blank">
-    <img src="https://github.com/AppHazard-Studios/VIBRARY/blob/main/VIBRARY_Preview.png?raw=true" width="600" alt="VIBRARY Preview"/>
+  <a href="https://github.com/AppHazard-Studios/VIBRARY/blob/main/screenshot.jpg?raw=true" target="_blank">
+    <img src="https://github.com/AppHazard-Studios/VIBRARY/blob/main/screenshot.jpg?raw=true" width="600" alt="VIBRARY Preview"/>
   </a>
 </p>
 
