@@ -7,33 +7,8 @@ class Vibrary {
     this.currentVideo = null;
     this.selectedRating = 0;
     this.selectedPlaylist = null;
-    this.hideNSFW = false;
     this.blacklistEnabled = true; // Enabled by default
     this.blacklistedDomains = [];
-
-    // NSFW domain blacklist (separate from user blacklist)
-    this.nsfwDomains = [
-      'pornhub.com',
-      'xvideos.com',
-      'xnxx.com',
-      'youporn.com',
-      'redtube.com',
-      'tube8.com',
-      'spankbang.com',
-      'xhamster.com',
-      'beeg.com',
-      'drtuber.com',
-      'thumbzilla.com',
-      'nuvid.com',
-      'porntrex.com',
-      'eporner.com',
-      'fapdu.com',
-      'gotporn.com',
-      'analdin.com',
-      'vjav.com',
-      'javhub.net',
-      'javlibrary.com'
-    ];
 
     this.init();
   }
@@ -52,7 +27,7 @@ class Vibrary {
       this.videos = result.videos || {};
       this.playlists = result.playlists || {};
 
-      // Clean up any duplicate YouTube videos with bad titles
+      // Clean up any duplicate videos
       this.cleanupDuplicates();
 
       console.log('VIBRARY: Loaded', Object.keys(this.videos).length, 'videos');
@@ -65,12 +40,10 @@ class Vibrary {
 
   async loadSettings() {
     try {
-      const result = await chrome.storage.local.get(['hideNSFW', 'blacklistEnabled', 'blacklistedDomains']);
-      this.hideNSFW = result.hideNSFW || false;
+      const result = await chrome.storage.local.get(['blacklistEnabled', 'blacklistedDomains']);
       this.blacklistEnabled = result.blacklistEnabled !== false; // Default to true
       this.blacklistedDomains = result.blacklistedDomains || [];
 
-      this.updateNSFWToggle();
       this.updateBlacklistToggle();
     } catch (error) {
       console.error('Error loading settings:', error);
@@ -80,7 +53,6 @@ class Vibrary {
   async saveSettings() {
     try {
       await chrome.storage.local.set({
-        hideNSFW: this.hideNSFW,
         blacklistEnabled: this.blacklistEnabled,
         blacklistedDomains: this.blacklistedDomains
       });
@@ -89,28 +61,9 @@ class Vibrary {
     }
   }
 
-  updateNSFWToggle() {
-    const checkbox = document.getElementById('nsfw-checkbox');
-    checkbox.classList.toggle('checked', this.hideNSFW);
-  }
-
   updateBlacklistToggle() {
-    const toggle = document.getElementById('blacklist-toggle');
     const checkbox = document.getElementById('blacklist-checkbox');
-
-    if (toggle) toggle.classList.toggle('enabled', this.blacklistEnabled);
     if (checkbox) checkbox.classList.toggle('checked', this.blacklistEnabled);
-  }
-
-  isNSFWVideo(video) {
-    if (!video.url) return false;
-
-    try {
-      const hostname = new URL(video.url).hostname.toLowerCase().replace('www.', '');
-      return this.nsfwDomains.some(domain => hostname.includes(domain));
-    } catch (e) {
-      return false;
-    }
   }
 
   isBlacklistedVideo(video) {
@@ -127,32 +80,25 @@ class Vibrary {
   }
 
   cleanupDuplicates() {
-    const youtubeVideos = {};
+    const videosById = {};
     const toDelete = [];
 
-    // Group YouTube videos by video ID
+    // Group videos by their unique identifiers
     Object.entries(this.videos).forEach(([id, video]) => {
-      if (video.platform === 'youtube' && video.videoId) {
-        if (!youtubeVideos[video.videoId]) {
-          youtubeVideos[video.videoId] = [];
-        }
-        youtubeVideos[video.videoId].push({ id, ...video });
+      const uniqueKey = this.getVideoUniqueKey(video);
+      if (!videosById[uniqueKey]) {
+        videosById[uniqueKey] = [];
       }
+      videosById[uniqueKey].push({ id, ...video });
     });
 
-    // For each YouTube video, keep only the one with the best title
-    Object.values(youtubeVideos).forEach(duplicates => {
+    // For each group, keep only the most recent one
+    Object.values(videosById).forEach(duplicates => {
       if (duplicates.length > 1) {
-        // Sort by title quality (avoid "Shorts", "Comments", etc.)
-        duplicates.sort((a, b) => {
-          const aBad = this.isBadTitle(a.title);
-          const bBad = this.isBadTitle(b.title);
-          if (aBad && !bBad) return 1;
-          if (!aBad && bBad) return -1;
-          return b.title.length - a.title.length; // Prefer longer titles
-        });
+        // Sort by watchedAt timestamp (most recent first)
+        duplicates.sort((a, b) => b.watchedAt - a.watchedAt);
 
-        // Mark all but the best one for deletion
+        // Mark all but the most recent for deletion
         duplicates.slice(1).forEach(video => {
           toDelete.push(video.id);
         });
@@ -167,9 +113,20 @@ class Vibrary {
     }
   }
 
-  isBadTitle(title) {
-    if (!title) return true;
-    return /^(shorts|comments?\s*\d*|\d+\s*comments?|loading|watch|video|player|debug\s*info)$/i.test(title.trim());
+  getVideoUniqueKey(video) {
+    // Create a unique key based on video ID or URL + title
+    if (video.videoId) {
+      return `${video.platform || 'generic'}:${video.videoId}`;
+    }
+
+    try {
+      const url = new URL(video.url);
+      const normalizedUrl = `${url.hostname}${url.pathname}`;
+      const normalizedTitle = video.title.toLowerCase().replace(/[^\w\s]/g, '').trim();
+      return `${normalizedUrl}:${normalizedTitle}`;
+    } catch (e) {
+      return video.url + ':' + video.title;
+    }
   }
 
   async saveData() {
@@ -200,9 +157,6 @@ class Vibrary {
     document.querySelectorAll('.tab').forEach(tab => {
       tab.addEventListener('click', () => this.switchTab(tab.dataset.tab));
     });
-
-    // NSFW Toggle
-    document.getElementById('nsfw-toggle').addEventListener('click', () => this.toggleNSFW());
 
     // Settings Menu
     document.getElementById('settings-button').addEventListener('click', (e) => {
@@ -297,13 +251,6 @@ class Vibrary {
     this.render(); // Re-render to apply changes
   }
 
-  async toggleNSFW() {
-    this.hideNSFW = !this.hideNSFW;
-    this.updateNSFWToggle();
-    await this.saveSettings();
-    this.render(); // Re-render to apply filter
-  }
-
   bindModalEvents() {
     // Rating modal
     document.getElementById('save-rating-btn').addEventListener('click', () => this.saveRating());
@@ -385,11 +332,6 @@ class Vibrary {
       videos = videos.filter(v => v.rating === rating);
     }
 
-    // Filter NSFW if enabled
-    if (this.hideNSFW) {
-      videos = videos.filter(v => !this.isNSFWVideo(v));
-    }
-
     // Filter blacklisted domains if enabled
     if (this.blacklistEnabled) {
       videos = videos.filter(v => !this.isBlacklistedVideo(v));
@@ -421,23 +363,22 @@ class Vibrary {
     }
 
     container.innerHTML = playlists.map(([name, videoIds]) => {
-      // Get first video for thumbnail
+      // Get first valid video for thumbnail
       let thumbnail = '📁';
       let firstVideo = null;
 
-      if (videoIds.length > 0) {
-        // Find first video that exists and isn't blacklisted
-        for (const videoId of videoIds) {
-          const video = this.videos[videoId];
-          if (video && !this.isBlacklistedVideo(video)) {
-            firstVideo = video;
-            break;
-          }
+      // Find first video that exists and isn't blacklisted
+      for (const videoId of videoIds) {
+        const video = this.videos[videoId];
+        if (video && !this.isBlacklistedVideo(video)) {
+          firstVideo = video;
+          break;
         }
+      }
 
-        if (firstVideo?.thumbnail) {
-          thumbnail = `<img src="${firstVideo.thumbnail}" alt="" loading="lazy">`;
-        }
+      // Use the first video's thumbnail if available
+      if (firstVideo && firstVideo.thumbnail) {
+        thumbnail = `<img src="${firstVideo.thumbnail}" alt="${this.escapeHtml(firstVideo.title)}" loading="lazy">`;
       }
 
       // Count non-blacklisted videos
@@ -453,7 +394,7 @@ class Vibrary {
           </div>
           <div class="playlist-info">
             <div class="playlist-name">${this.escapeHtml(name)}</div>
-            <div class="playlist-count">${visibleVideoCount} videos</div>
+            <div class="playlist-count">${visibleVideoCount} video${visibleVideoCount !== 1 ? 's' : ''}</div>
           </div>
         </div>
       `;
@@ -466,8 +407,8 @@ class Vibrary {
 
   renderVideoList(container, videos, options = {}) {
     if (videos.length === 0) {
-      const message = this.hideNSFW ?
-          'No videos found (NSFW content hidden)' :
+      const message = this.blacklistEnabled && this.blacklistedDomains.length > 0 ?
+          'No videos found (blacklist active)' :
           'No videos found';
       container.innerHTML = `
         <div class="empty-state">
@@ -482,17 +423,15 @@ class Vibrary {
       const date = new Date(video.watchedAt).toLocaleDateString();
       const rating = video.rating > 0 ? '★'.repeat(video.rating) + '☆'.repeat(5 - video.rating) : 'Unrated';
       const timeAgo = this.getTimeAgo(video.watchedAt);
-      const isNSFW = this.isNSFWVideo(video);
-      const nsfwClass = isNSFW && this.hideNSFW ? 'nsfw-hidden' : '';
 
       return `
-        <div class="video-item ${nsfwClass}" data-video-id="${video.id}">
+        <div class="video-item" data-video-id="${video.id}">
           <div class="video-header" data-action="open-video" data-url="${this.escapeHtml(video.url)}">
             <div class="video-thumbnail">
               ${video.thumbnail ? `<img src="${video.thumbnail}" alt="" loading="lazy">` : '📺'}
             </div>
             <div class="video-info">
-              <div class="video-title">${this.escapeHtml(video.title)}${isNSFW ? ' 🔞' : ''}</div>
+              <div class="video-title">${this.escapeHtml(video.title)}</div>
               <div class="video-url">Click to open • ${timeAgo}</div>
             </div>
           </div>
@@ -555,32 +494,6 @@ class Vibrary {
     this.renderPlaylistsList();
   }
 
-  renderPlaylistsList() {
-    const container = document.getElementById('playlist-list');
-    const playlists = Object.entries(this.playlists);
-
-    if (playlists.length === 0) {
-      container.innerHTML = `
-        <div class="empty-state">
-          <h3>No Playlists Yet</h3>
-          <p>Create your first playlist to organize your videos</p>
-        </div>
-      `;
-      return;
-    }
-
-    container.innerHTML = playlists.map(([name, videoIds]) => `
-      <div class="playlist-item" data-action="show-playlist" data-playlist="${this.escapeHtml(name)}">
-        <div class="playlist-name">${this.escapeHtml(name)}</div>
-        <div class="playlist-count">${videoIds.length} videos</div>
-      </div>
-    `).join('');
-
-    container.querySelectorAll('[data-action="show-playlist"]').forEach(item => {
-      item.addEventListener('click', () => this.showPlaylist(item.dataset.playlist));
-    });
-  }
-
   showPlaylist(name) {
     this.currentPlaylist = name;
     document.getElementById('playlists').classList.remove('active');
@@ -594,7 +507,7 @@ class Vibrary {
     const videoIds = this.playlists[this.currentPlaylist] || [];
     const videos = videoIds
         .map(id => ({ id, ...this.videos[id] }))
-        .filter(v => v.title);
+        .filter(v => v.title && !this.isBlacklistedVideo(v));
 
     this.renderVideoList(container, videos, { showRemove: true });
   }
@@ -746,13 +659,17 @@ class Vibrary {
     this.render();
   }
 
-  // Export/Import
+  // Export/Import with blacklist support
   async exportData() {
     const exportData = {
       videos: this.videos,
       playlists: this.playlists,
+      blacklist: {
+        enabled: this.blacklistEnabled,
+        domains: this.blacklistedDomains
+      },
       exportDate: new Date().toISOString(),
-      version: '2.0'
+      version: '2.1' // Updated version
     };
 
     const dataStr = JSON.stringify(exportData, null, 2);
@@ -798,6 +715,13 @@ class Vibrary {
         Object.assign(this.playlists, importData.playlists);
       }
 
+      // Import blacklist settings if available
+      if (importData.blacklist) {
+        this.blacklistEnabled = importData.blacklist.enabled !== false;
+        this.blacklistedDomains = importData.blacklist.domains || [];
+        await this.saveSettings();
+      }
+
       await this.saveData();
       await this.loadData();
       this.render();
@@ -807,6 +731,7 @@ class Vibrary {
 
     } catch (error) {
       alert('Error parsing import data. Please check the format.');
+      console.error('Import error:', error);
     }
   }
 

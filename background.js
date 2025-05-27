@@ -1,7 +1,5 @@
 // VIBRARY Background Service Worker
 chrome.runtime.onInstalled.addListener(async () => {
-  console.log('VIBRARY: Extension installed/updated');
-
   // Initialize storage
   const result = await chrome.storage.local.get(['videos', 'playlists']);
 
@@ -11,15 +9,16 @@ chrome.runtime.onInstalled.addListener(async () => {
 
   if (Object.keys(updates).length > 0) {
     await chrome.storage.local.set(updates);
-    console.log('VIBRARY: Storage initialized');
   }
 });
 
-// Log storage changes for debugging
+// Log significant storage changes only
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local') {
-    const videoCount = changes.videos ? Object.keys(changes.videos.newValue || {}).length : 'unchanged';
-    const playlistCount = changes.playlists ? Object.keys(changes.playlists.newValue || {}).length : 'unchanged';
-    console.log(`VIBRARY: Storage updated - Videos: ${videoCount}, Playlists: ${playlistCount}`);
+  if (area === 'local' && changes.videos) {
+    const oldCount = Object.keys(changes.videos.oldValue || {}).length;
+    const newCount = Object.keys(changes.videos.newValue || {}).length;
+    if (newCount !== oldCount) {
+      console.log(`VIBRARY: Video count changed from ${oldCount} to ${newCount}`);
+    }
   }
 });
