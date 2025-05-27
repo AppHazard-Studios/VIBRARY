@@ -192,6 +192,20 @@ body {
   gap: 12px;
 }
 
+.playlist-item {
+  background: linear-gradient(135deg, var(--bg-card), var(--bg-tertiary));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-large);
+  padding: 0;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 0.9;
+}
+
 .settings-container {
   position: relative;
 }

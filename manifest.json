@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
   "name": "VIBRARY",
-  "version": "2.0",
-  "description": "Universal video tracking & playlist manager for all websites",
-  "permissions": ["storage", "activeTab", "scripting"],
+  "version": "2.2",
+  "description": "Track videos across the web with playlists, ratings, and resume playback",
+  "permissions": ["storage", "unlimitedStorage", "activeTab", "scripting"],
   "host_permissions": ["<all_urls>"],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "VIBRARY"
+    "default_title": "VIBRARY - Video Library"
   },
   "content_scripts": [{
     "matches": ["<all_urls>"],

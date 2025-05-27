@@ -1,9 +1,12 @@
-// VIBRARY Content Script - Enhanced Video Detection with Better URL Capture
+// VIBRARY Content Script - Enhanced Video Detection with Better Deduplication
 class ChromeNativeVideoDetector {
   constructor() {
     this.detectedVideos = new Map();
+    this.recentDetections = new Map(); // Track recent detections to prevent flashing
     this.lastMediaTitle = '';
     this.mediaCheckInterval = null;
+    this.currentVideo = null;
+    this.timestampInterval = null;
     this.init();
   }
 
@@ -21,6 +24,54 @@ class ChromeNativeVideoDetector {
 
     // Method 4: URL change detection for SPAs
     this.setupUrlChangeDetection();
+
+    // Method 5: Timestamp tracking
+    this.setupTimestampTracking();
+  }
+
+  setupTimestampTracking() {
+    // Update timestamp every 10 seconds for playing videos
+    this.timestampInterval = setInterval(() => {
+      const videos = document.querySelectorAll('video');
+      videos.forEach(video => {
+        if (!video.paused && video.currentTime > 0 && video.duration > 0) {
+          this.updateVideoTimestamp(video);
+        }
+      });
+    }, 10000);
+  }
+
+  async updateVideoTimestamp(video) {
+    try {
+      const title = this.extractVideoTitle(video);
+      const url = this.extractBestVideoUrl(video);
+
+      if (!title || !url) return;
+
+      // Find the video in storage
+      const result = await chrome.storage.local.get('videos');
+      const videos = result.videos || {};
+
+      // Find matching video by URL and title
+      const videoEntry = Object.entries(videos).find(([id, v]) => {
+        return this.isSameVideo(v, { title, url });
+      });
+
+      if (videoEntry) {
+        const [id, videoData] = videoEntry;
+        // Update timestamp
+        videos[id].lastTimestamp = Math.floor(video.currentTime);
+        videos[id].duration = Math.floor(video.duration);
+
+        // Throttle updates to prevent excessive writes
+        if (!this.lastTimestampUpdate || Date.now() - this.lastTimestampUpdate > 5000) {
+          await chrome.storage.local.set({ videos });
+          this.lastTimestampUpdate = Date.now();
+        }
+      }
+    } catch (error) {
+      console.error('VIBRARY: Error updating timestamp:', error);
+    }
   }
 
   setupUrlChangeDetection() {
@@ -31,6 +82,8 @@ class ChromeNativeVideoDetector {
       const currentUrl = window.location.href;
       if (currentUrl !== lastUrl) {
         lastUrl = currentUrl;
+        // Clear recent detections on URL change to allow re-detection
+        this.recentDetections.clear();
         setTimeout(() => this.checkForVideos(), 1000);
       }
     });
@@ -42,6 +95,7 @@ class ChromeNativeVideoDetector {
 
     // Also listen for popstate events
     window.addEventListener('popstate', () => {
+      this.recentDetections.clear();
       setTimeout(() => this.checkForVideos(), 500);
     });
   }
@@ -63,10 +117,10 @@ class ChromeNativeVideoDetector {
 
     this.debugCurrentState();
 
-    // Start checking every 2 seconds (less aggressive)
+    // Start checking every 3 seconds (reduced frequency)
     this.mediaCheckInterval = setInterval(() => {
       this.checkMediaSession();
-    }, 2000);
+    }, 3000);
 
     // Initial checks
     setTimeout(() => this.checkMediaSession(), 500);
@@ -105,46 +159,43 @@ class ChromeNativeVideoDetector {
 
   checkMediaSession() {
     try {
-      console.log('🔄 VIBRARY: Checking media session...');
-
-      if (!navigator.mediaSession) {
-        console.log('❌ VIBRARY: No media session available');
+      if (!navigator.mediaSession || !navigator.mediaSession.metadata) {
         return;
       }
 
       const metadata = navigator.mediaSession.metadata;
-
-      if (!metadata) {
-        console.log('📭 VIBRARY: No metadata in media session');
-        this.debugCurrentState();
-        return;
-      }
-
-      if (!metadata.title) {
-        console.log('📝 VIBRARY: Metadata exists but no title');
+      if (!metadata.title || metadata.title.trim().length < 2) {
         return;
       }
 
       const currentTitle = metadata.title.trim();
-      console.log('🎵 VIBRARY: Found media session title:', currentTitle);
+      const currentUrl = window.location.href;
 
-      const sessionKey = window.location.href + ':' + currentTitle;
-
-      if (this.detectedVideos.has(sessionKey)) {
-        console.log('⏭️ VIBRARY: Already detected this video');
-        return;
-      }
-
-      if (currentTitle.length < 2) {
-        console.log('❌ VIBRARY: Title too short:', currentTitle);
+      // Check if we've detected this recently (within 30 seconds)
+      const recentKey = `${currentUrl}::${currentTitle}`;
+      const recentDetection = this.recentDetections.get(recentKey);
+      if (recentDetection && Date.now() - recentDetection < 30000) {
         return;
       }
 
       console.log('✅ VIBRARY: Processing new video from media session');
       this.processVideoFromMediaSession(metadata);
+      this.recentDetections.set(recentKey, Date.now());
+
+      // Clean up old recent detections
+      this.cleanupRecentDetections();
 
     } catch (error) {
       console.error('💥 VIBRARY: Error checking media session:', error);
+    }
+  }
+
+  cleanupRecentDetections() {
+    const now = Date.now();
+    for (const [key, timestamp] of this.recentDetections) {
+      if (now - timestamp > 60000) { // Remove entries older than 1 minute
+        this.recentDetections.delete(key);
+      }
     }
   }
 
@@ -152,6 +203,7 @@ class ChromeNativeVideoDetector {
     // Listen for video play events
     document.addEventListener('play', (event) => {
       if (event.target.tagName === 'VIDEO') {
+        this.currentVideo = event.target;
         setTimeout(() => {
           this.checkVideoElement(event.target);
         }, 1000);
@@ -161,6 +213,7 @@ class ChromeNativeVideoDetector {
     // Listen for video playing events
     document.addEventListener('playing', (event) => {
       if (event.target.tagName === 'VIDEO') {
+        this.currentVideo = event.target;
         setTimeout(() => {
           this.checkVideoElement(event.target);
         }, 1000);
@@ -232,17 +285,10 @@ class ChromeNativeVideoDetector {
       // Extract the most accurate URL possible
       const videoUrl = this.extractBestVideoUrl(video);
 
-      // Create smart key for better deduplication
-      const videoKey = this.generateVideoKey(title, videoUrl);
-
-      // Check if we've already processed this exact video recently
-      if (this.detectedVideos.has(videoKey)) {
-        const existingVideo = this.detectedVideos.get(videoKey);
-        // Only update if it's been more than 5 seconds
-        if (Date.now() - existingVideo.lastChecked < 5000) {
-          return;
-        }
-        existingVideo.lastChecked = Date.now();
+      // Check recent detections
+      const recentKey = `${videoUrl}::${title}`;
+      const recentDetection = this.recentDetections.get(recentKey);
+      if (recentDetection && Date.now() - recentDetection < 30000) {
         return;
       }
 
@@ -257,17 +303,19 @@ class ChromeNativeVideoDetector {
       const videoData = {
         id: this.generateId(title + videoUrl),
         url: videoUrl,
-        title: title,
+        title: this.cleanTitle(title, videoUrl),
         thumbnail: thumbnail,
         platform: this.detectPlatform(videoUrl),
         source: 'video-element',
         watchedAt: Date.now(),
         lastChecked: Date.now(),
         rating: 0,
+        lastTimestamp: Math.floor(video.currentTime),
         ...metadata
       };
 
-      this.detectedVideos.set(videoKey, videoData);
+      // Record the detection
+      this.recentDetections.set(recentKey, Date.now());
       this.recordVideo(videoData);
 
     } catch (error) {
@@ -275,16 +323,58 @@ class ChromeNativeVideoDetector {
     }
   }
 
+  cleanTitle(title, url) {
+    const platform = this.detectPlatform(url);
+
+    // Platform-specific title cleaning
+    switch (platform) {
+      case 'youtube':
+        // YouTube already has clean titles usually
+        return title;
+
+      case 'dailymotion':
+        // DailyMotion often prepends channel name
+        // Format: "Channel Name - Actual Video Title"
+        if (title.includes(' - ')) {
+          const parts = title.split(' - ');
+          if (parts.length > 1) {
+            // Return the part after the first dash (likely the actual title)
+            return parts.slice(1).join(' - ').trim();
+          }
+        }
+        return title;
+
+      case 'vimeo':
+        // Vimeo sometimes has "from Username" at the end
+        return title.replace(/ from .+$/, '').trim();
+
+      default:
+        // Generic cleaning - remove common patterns
+        return title
+            .replace(/ - YouTube$/, '')
+            .replace(/ \| .+$/, '') // Remove anything after |
+            .trim();
+    }
+  }
+
   extractBestVideoUrl(video) {
     // Always prefer the page URL over direct video URLs
-
-    // 1. First, check if we're on a video page
     const currentUrl = window.location.href;
+
+    // For DailyMotion, ensure we're using the canonical video URL
+    if (currentUrl.includes('dailymotion.com')) {
+      // Extract video ID and construct clean URL
+      const videoIdMatch = currentUrl.match(/\/video\/([a-zA-Z0-9]+)/);
+      if (videoIdMatch) {
+        return `https://www.dailymotion.com/video/${videoIdMatch[1]}`;
+      }
+    }
+
     if (this.isVideoPage(currentUrl)) {
       return currentUrl;
     }
 
-    // 2. Look for canonical URL or og:url
+    // Look for canonical URL or og:url
     const canonicalUrl = document.querySelector('link[rel="canonical"]')?.href;
     const ogUrl = document.querySelector('meta[property="og:url"]')?.content;
 
@@ -296,7 +386,7 @@ class ChromeNativeVideoDetector {
       return ogUrl;
     }
 
-    // 3. Check for iframe parent (embedded videos)
+    // Check for iframe parent (embedded videos)
     let element = video;
     for (let i = 0; i < 5; i++) {
       if (element.parentElement?.tagName === 'IFRAME') {
@@ -309,7 +399,7 @@ class ChromeNativeVideoDetector {
       if (!element) break;
     }
 
-    // 4. Use current page URL as final fallback (never use direct video src)
+    // Use current page URL as final fallback
     return currentUrl;
   }
 
@@ -356,7 +446,7 @@ class ChromeNativeVideoDetector {
 
     // Store current timestamp if video is seekable
     if (video.currentTime > 0 && video.duration > 0) {
-      metadata.timestamp = Math.floor(video.currentTime);
+      metadata.lastTimestamp = Math.floor(video.currentTime);
       metadata.duration = Math.floor(video.duration);
     }
 
@@ -383,10 +473,6 @@ class ChromeNativeVideoDetector {
       twitch: [
         /twitch\.tv\/videos\/(\d+)/,
         /twitch\.tv\/[^\/]+\/clip\/([a-zA-Z0-9_-]+)/
-      ],
-      pornhub: [
-        /pornhub\.com\/view_video\.php\?viewkey=([a-zA-Z0-9]+)/,
-        /pornhub\.com\/embed\/([a-zA-Z0-9]+)/
       ]
     };
 
@@ -399,42 +485,96 @@ class ChromeNativeVideoDetector {
       }
     }
 
-    // Generic video ID extraction from URL
-    const genericPatterns = [
-      /\/([a-zA-Z0-9_-]{8,})$/,  // ID at end of URL
-      /[?&]id=([a-zA-Z0-9_-]+)/,  // ID in query parameter
-      /[?&]video=([a-zA-Z0-9_-]+)/,  // video parameter
-      /[?&]vid=([a-zA-Z0-9_-]+)/,  // vid parameter
-      /[?&]content=([a-zA-Z0-9_-]+)/  // content parameter
-    ];
-
-    for (const pattern of genericPatterns) {
-      const match = url.match(pattern);
-      if (match) {
-        return match[1];
-      }
-    }
-
     return null;
   }
 
-  isDuplicateVideo(title, url) {
-    for (const [key, videoData] of this.detectedVideos) {
-      // Check by video ID if available
-      const currentVideoId = this.extractVideoId(url);
-      const existingVideoId = this.extractVideoId(videoData.url || '');
+  isSameVideo(video1, video2) {
+    // Strong deduplication logic
 
-      if (currentVideoId && existingVideoId && currentVideoId === existingVideoId) {
-        return true;
-      }
+    // 1. Check by video ID if both have it
+    if (video1.videoId && video2.videoId && video1.platform === video2.platform) {
+      return video1.videoId === video2.videoId;
+    }
 
-      // Check by URL and title similarity
-      if (this.isSimilarTitle(title, videoData.title || '') &&
-          this.normalizeUrl(url) === this.normalizeUrl(videoData.url || '')) {
-        return true;
+    // 2. Check by URL (normalized)
+    const url1 = this.normalizeUrl(video1.url);
+    const url2 = this.normalizeUrl(video2.url);
+
+    if (url1 === url2) {
+      return true;
+    }
+
+    // 3. Check by title similarity (fuzzy matching)
+    const title1 = this.normalizeTitle(video1.title);
+    const title2 = this.normalizeTitle(video2.title);
+
+    // Exact match after normalization
+    if (title1 === title2) {
+      return true;
+    }
+
+    // Check if one title contains the other (handling channel prefixes)
+    if (title1.length > 10 && title2.length > 10) {
+      if (title1.includes(title2) || title2.includes(title1)) {
+        // Also check if they're on the same platform
+        return video1.platform === video2.platform;
       }
     }
+
+    // 4. Levenshtein distance for very similar titles
+    if (this.calculateSimilarity(title1, title2) > 0.85) {
+      return video1.platform === video2.platform;
+    }
+
     return false;
+  }
+
+  normalizeTitle(title) {
+    return title
+        .toLowerCase()
+        .replace(/[^\w\s]/g, '') // Remove special characters
+        .replace(/\s+/g, ' ') // Normalize whitespace
+        .trim();
+  }
+
+  calculateSimilarity(str1, str2) {
+    // Simple similarity calculation
+    const longer = str1.length > str2.length ? str1 : str2;
+    const shorter = str1.length > str2.length ? str2 : str1;
+
+    if (longer.length === 0) return 1.0;
+
+    const editDistance = this.getEditDistance(longer, shorter);
+    return (longer.length - editDistance) / parseFloat(longer.length);
+  }
+
+  getEditDistance(str1, str2) {
+    // Simplified Levenshtein distance
+    const matrix = [];
+
+    for (let i = 0; i <= str2.length; i++) {
+      matrix[i] = [i];
+    }
+
+    for (let j = 0; j <= str1.length; j++) {
+      matrix[0][j] = j;
+    }
+
+    for (let i = 1; i <= str2.length; i++) {
+      for (let j = 1; j <= str1.length; j++) {
+        if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+          matrix[i][j] = matrix[i - 1][j - 1];
+        } else {
+          matrix[i][j] = Math.min(
+              matrix[i - 1][j - 1] + 1,
+              matrix[i][j - 1] + 1,
+              matrix[i - 1][j] + 1
+          );
+        }
+      }
+    }
+
+    return matrix[str2.length][str1.length];
   }
 
   generateId(input) {
@@ -451,6 +591,18 @@ class ChromeNativeVideoDetector {
     const methods = [
       // First try Media Session
       () => navigator.mediaSession?.metadata?.title,
+
+      // DailyMotion specific
+      () => {
+        if (window.location.hostname.includes('dailymotion.com')) {
+          // Try to find the actual video title element
+          const titleEl = document.querySelector('h1[class*="VideoInfoTitle"], .video-info-title, h1');
+          if (titleEl) {
+            return titleEl.textContent.trim();
+          }
+        }
+        return null;
+      },
 
       // Then video element attributes
       () => video.title,
@@ -597,11 +749,12 @@ class ChromeNativeVideoDetector {
       const title = this.buildTitle(metadata);
       const thumbnail = this.extractThumbnail(metadata);
       const videoUrl = this.extractBestVideoUrl(document.querySelector('video'));
+      const cleanedTitle = this.cleanTitle(title, videoUrl);
 
       const videoData = {
-        id: this.generateId(title + videoUrl),
+        id: this.generateId(cleanedTitle + videoUrl),
         url: videoUrl,
-        title: title,
+        title: cleanedTitle,
         thumbnail: thumbnail,
         platform: this.detectPlatform(videoUrl),
         source: 'chrome-media-session',
@@ -611,10 +764,7 @@ class ChromeNativeVideoDetector {
         videoId: this.extractVideoId(videoUrl)
       };
 
-      const videoKey = this.generateVideoKey(title, videoUrl);
-      this.detectedVideos.set(videoKey, videoData);
-
-      console.log('📋 VIBRARY: Detected video:', title);
+      console.log('📋 VIBRARY: Detected video:', cleanedTitle);
       this.recordVideo(videoData);
 
     } catch (error) {
@@ -631,17 +781,20 @@ class ChromeNativeVideoDetector {
       }
 
       const videoUrl = this.extractBestVideoUrl(videoElement);
+      const cleanedTitle = this.cleanTitle(title, videoUrl);
 
       const videoData = {
-        id: this.generateId(title + videoUrl),
+        id: this.generateId(cleanedTitle + videoUrl),
         url: videoUrl,
-        title: title,
+        title: cleanedTitle,
         thumbnail: videoElement.poster || '',
         platform: this.detectPlatform(videoUrl),
         source: 'chrome-pip',
         watchedAt: Date.now(),
         rating: 0,
-        videoId: this.extractVideoId(videoUrl)
+        videoId: this.extractVideoId(videoUrl),
+        lastTimestamp: Math.floor(videoElement.currentTime),
+        duration: Math.floor(videoElement.duration)
       };
 
       this.recordVideo(videoData);
@@ -655,8 +808,15 @@ class ChromeNativeVideoDetector {
     const title = metadata.title;
     const artist = metadata.artist;
 
-    if (artist && artist !== title && title.indexOf(artist) === -1) {
-      return artist + ' - ' + title;
+    // Don't prepend artist if it's already in the title
+    if (artist && artist !== title && !title.includes(artist)) {
+      // Only prepend for music/podcast platforms
+      const musicPlatforms = ['spotify', 'soundcloud', 'apple', 'podcast'];
+      const isMusicPlatform = musicPlatforms.some(p => window.location.hostname.includes(p));
+
+      if (isMusicPlatform) {
+        return artist + ' - ' + title;
+      }
     }
 
     return title;
@@ -686,7 +846,7 @@ class ChromeNativeVideoDetector {
     return title
         .replace(' - YouTube', '')
         .replace(' on Vimeo', '')
-        .replace(' - Pornhub.com', '')
+        .replace(' - Dailymotion', '')
         .replace(/ - [^-]*$/, '')
         .replace(/ \| [^|]*$/, '')
         .trim();
@@ -695,7 +855,6 @@ class ChromeNativeVideoDetector {
   detectPlatform(url) {
     if (url.indexOf('youtube.com') !== -1 || url.indexOf('youtu.be') !== -1) return 'youtube';
     if (url.indexOf('vimeo.com') !== -1) return 'vimeo';
-    if (url.indexOf('pornhub.com') !== -1) return 'pornhub';
     if (url.indexOf('dailymotion.com') !== -1) return 'dailymotion';
     if (url.indexOf('twitch.tv') !== -1) return 'twitch';
     if (url.indexOf('netflix.com') !== -1) return 'netflix';
@@ -706,44 +865,16 @@ class ChromeNativeVideoDetector {
     return 'generic';
   }
 
-  generateVideoKey(title, url) {
-    // Create a smart key that handles duplicates better
-    const videoId = this.extractVideoId(url);
-
-    if (videoId) {
-      const platform = this.detectPlatform(url);
-      return `${platform}:${videoId}`;
-    }
-
-    // For other sites, normalize URL and title
-    const normalizedUrl = this.normalizeUrl(url);
-    const normalizedTitle = this.normalizeTitle(title);
-
-    return `${normalizedUrl}::${normalizedTitle}`;
-  }
-
   normalizeUrl(url) {
     try {
       const urlObj = new URL(url);
-      return `${urlObj.hostname}${urlObj.pathname}`;
+      // Remove www. and trailing slashes
+      const hostname = urlObj.hostname.replace(/^www\./, '');
+      const pathname = urlObj.pathname.replace(/\/$/, '');
+      return `${hostname}${pathname}`;
     } catch (e) {
       return url;
     }
-  }
-
-  normalizeTitle(title) {
-    return title
-        .toLowerCase()
-        .replace(/[^\w\s]/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-  }
-
-  isSimilarTitle(title1, title2) {
-    const norm1 = this.normalizeTitle(title1);
-    const norm2 = this.normalizeTitle(title2);
-
-    return norm1.includes(norm2) || norm2.includes(norm1);
   }
 
   async recordVideo(videoData) {
@@ -751,21 +882,45 @@ class ChromeNativeVideoDetector {
       const result = await chrome.storage.local.get('videos');
       const videos = result.videos || {};
 
-      // Check if already exists using smart deduplication
-      const existingKey = this.findExistingVideo(videoData, videos);
-      if (existingKey) {
-        // Update timestamp to move it to top of history
-        videos[existingKey].watchedAt = Date.now();
+      // Check if already exists using strong deduplication
+      let existingId = null;
+      let shouldUpdate = false;
+
+      for (const [id, existingVideo] of Object.entries(videos)) {
+        if (this.isSameVideo(existingVideo, videoData)) {
+          existingId = id;
+          shouldUpdate = true;
+          break;
+        }
+      }
+
+      if (existingId) {
+        // Update existing video
+        videos[existingId].watchedAt = Date.now();
+        videos[existingId].lastChecked = Date.now();
+
         // Update URL if we have a better one
         if (videoData.url && this.isVideoPage(videoData.url)) {
-          videos[existingKey].url = videoData.url;
+          videos[existingId].url = videoData.url;
         }
+
         // Update thumbnail if better
-        if (videoData.thumbnail && !videos[existingKey].thumbnail) {
-          videos[existingKey].thumbnail = videoData.thumbnail;
+        if (videoData.thumbnail && !videos[existingId].thumbnail) {
+          videos[existingId].thumbnail = videoData.thumbnail;
         }
-        console.log('📼 VIBRARY: Updated existing video:', videos[existingKey].title);
+
+        // Update timestamp if available
+        if (videoData.lastTimestamp !== undefined) {
+          videos[existingId].lastTimestamp = videoData.lastTimestamp;
+        }
+
+        if (videoData.duration !== undefined) {
+          videos[existingId].duration = videoData.duration;
+        }
+
+        console.log('📼 VIBRARY: Updated existing video:', videos[existingId].title);
       } else {
+        // Add new video
         videos[videoData.id] = videoData;
         console.log('✅ VIBRARY: Recorded new video:', videoData.title);
       }
@@ -777,35 +932,12 @@ class ChromeNativeVideoDetector {
     }
   }
 
-  findExistingVideo(newVideo, existingVideos) {
-    for (const [id, existingVideo] of Object.entries(existingVideos)) {
-      // First check by video ID if available
-      if (newVideo.videoId && existingVideo.videoId &&
-          newVideo.videoId === existingVideo.videoId) {
-        return id;
-      }
-
-      // Check by platform and video ID
-      if (newVideo.platform === existingVideo.platform) {
-        const newVideoId = this.extractVideoId(newVideo.url);
-        const existingVideoId = this.extractVideoId(existingVideo.url);
-        if (newVideoId && existingVideoId && newVideoId === existingVideoId) {
-          return id;
-        }
-      }
-
-      // Check by URL and similar titles
-      if (this.normalizeUrl(newVideo.url) === this.normalizeUrl(existingVideo.url) &&
-          this.isSimilarTitle(newVideo.title, existingVideo.title)) {
-        return id;
-      }
-    }
-    return null;
-  }
-
   destroy() {
     if (this.mediaCheckInterval) {
       clearInterval(this.mediaCheckInterval);
+    }
+    if (this.timestampInterval) {
+      clearInterval(this.timestampInterval);
     }
   }
 }

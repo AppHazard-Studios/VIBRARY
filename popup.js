@@ -7,7 +7,7 @@ class Vibrary {
     this.currentVideo = null;
     this.selectedRating = 0;
     this.selectedPlaylist = null;
-    this.blacklistEnabled = true; // Enabled by default
+    this.blacklistEnabled = true;
     this.blacklistedDomains = [];
 
     this.init();
@@ -41,7 +41,7 @@ class Vibrary {
   async loadSettings() {
     try {
       const result = await chrome.storage.local.get(['blacklistEnabled', 'blacklistedDomains']);
-      this.blacklistEnabled = result.blacklistEnabled !== false; // Default to true
+      this.blacklistEnabled = result.blacklistEnabled !== false;
       this.blacklistedDomains = result.blacklistedDomains || [];
 
       this.updateBlacklistToggle();
@@ -98,10 +98,25 @@ class Vibrary {
         // Sort by watchedAt timestamp (most recent first)
         duplicates.sort((a, b) => b.watchedAt - a.watchedAt);
 
-        // Mark all but the most recent for deletion
-        duplicates.slice(1).forEach(video => {
-          toDelete.push(video.id);
+        // Keep the most recent, but merge any useful data
+        const keeper = duplicates[0];
+
+        // Merge useful data from duplicates
+        duplicates.slice(1).forEach(duplicate => {
+          // Keep the best timestamp
+          if (duplicate.lastTimestamp > keeper.lastTimestamp) {
+            keeper.lastTimestamp = duplicate.lastTimestamp;
+          }
+          // Keep the best rating
+          if (duplicate.rating > keeper.rating) {
+            keeper.rating = duplicate.rating;
+          }
+          // Mark for deletion
+          toDelete.push(duplicate.id);
         });
+
+        // Update the keeper with merged data
+        this.videos[keeper.id] = keeper;
       }
     });
 
@@ -114,19 +129,20 @@ class Vibrary {
   }
 
   getVideoUniqueKey(video) {
-    // Create a unique key based on video ID or URL + title
-    if (video.videoId) {
-      return `${video.platform || 'generic'}:${video.videoId}`;
+    // Create a unique key based on normalized title and platform
+    const normalizedTitle = video.title
+        .toLowerCase()
+        .replace(/[^\w\s]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    // If we have a video ID, use it
+    if (video.videoId && video.platform) {
+      return `${video.platform}:${video.videoId}`;
     }
 
-    try {
-      const url = new URL(video.url);
-      const normalizedUrl = `${url.hostname}${url.pathname}`;
-      const normalizedTitle = video.title.toLowerCase().replace(/[^\w\s]/g, '').trim();
-      return `${normalizedUrl}:${normalizedTitle}`;
-    } catch (e) {
-      return video.url + ':' + video.title;
-    }
+    // Otherwise use platform and normalized title
+    return `${video.platform || 'generic'}:${normalizedTitle}`;
   }
 
   async saveData() {
@@ -241,14 +257,14 @@ class Vibrary {
 
     console.log('VIBRARY: Blacklist updated:', domains);
     this.closeModal('blacklist-modal');
-    this.render(); // Re-render to apply blacklist
+    this.render();
   }
 
   async toggleBlacklist() {
     this.blacklistEnabled = !this.blacklistEnabled;
     this.updateBlacklistToggle();
     await this.saveSettings();
-    this.render(); // Re-render to apply changes
+    this.render();
   }
 
   bindModalEvents() {
@@ -424,15 +440,28 @@ class Vibrary {
       const rating = video.rating > 0 ? '★'.repeat(video.rating) + '☆'.repeat(5 - video.rating) : 'Unrated';
       const timeAgo = this.getTimeAgo(video.watchedAt);
 
+      // Create timestamp info
+      let timestampInfo = '';
+      if (video.lastTimestamp && video.duration) {
+        const percent = (video.lastTimestamp / video.duration * 100).toFixed(0);
+        timestampInfo = ` • ${this.formatTime(video.lastTimestamp)} / ${this.formatTime(video.duration)} (${percent}%)`;
+      }
+
+      // Add number if in playlist view
+      const numberBadge = options.showNumber && video.playlistIndex ?
+          `<div class="playlist-number">${video.playlistIndex}</div>` : '';
+
       return `
         <div class="video-item" data-video-id="${video.id}">
-          <div class="video-header" data-action="open-video" data-url="${this.escapeHtml(video.url)}">
+          <div class="video-header" data-action="open-video" data-url="${this.escapeHtml(video.url)}" data-timestamp="${video.lastTimestamp || 0}">
             <div class="video-thumbnail">
               ${video.thumbnail ? `<img src="${video.thumbnail}" alt="" loading="lazy">` : '📺'}
+              ${video.lastTimestamp > 10 ? '<div class="resume-indicator" title="Resume playback">▶</div>' : ''}
+              ${numberBadge}
             </div>
             <div class="video-info">
               <div class="video-title">${this.escapeHtml(video.title)}</div>
-              <div class="video-url">Click to open • ${timeAgo}</div>
+              <div class="video-url">Click to open • ${timeAgo}${timestampInfo}</div>
             </div>
           </div>
           <div class="video-meta">
@@ -452,9 +481,22 @@ class Vibrary {
     this.bindVideoActions(container);
   }
 
+  formatTime(seconds) {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  }
+
   bindVideoActions(container) {
     container.querySelectorAll('[data-action="open-video"]').forEach(el => {
-      el.addEventListener('click', () => window.open(el.dataset.url, '_blank'));
+      el.addEventListener('click', () => {
+        const url = el.dataset.url;
+        const timestamp = parseInt(el.dataset.timestamp) || 0;
+        const finalUrl = timestamp > 10 ?
+            this.getUrlWithTimestamp(url, timestamp) :
+            url;
+        window.open(finalUrl, '_blank');
+      });
     });
 
     container.querySelectorAll('[data-action="rate"]').forEach(el => {
@@ -486,30 +528,39 @@ class Vibrary {
     });
   }
 
-  // Playlist methods
-  showPlaylists() {
-    this.currentPlaylist = null;
-    document.getElementById('playlists').classList.add('active');
-    document.getElementById('playlist-view').classList.remove('active');
-    this.renderPlaylistsList();
-  }
+  getUrlWithTimestamp(url, timestamp) {
+    if (timestamp <= 10) return url;
 
-  showPlaylist(name) {
-    this.currentPlaylist = name;
-    document.getElementById('playlists').classList.remove('active');
-    document.getElementById('playlist-view').classList.add('active');
-    document.getElementById('playlist-name').textContent = name;
-    this.renderPlaylistView();
-  }
+    try {
+      const urlObj = new URL(url);
+      const platform = this.detectPlatform(url);
 
-  renderPlaylistView() {
-    const container = document.getElementById('playlist-videos');
-    const videoIds = this.playlists[this.currentPlaylist] || [];
-    const videos = videoIds
-        .map(id => ({ id, ...this.videos[id] }))
-        .filter(v => v.title && !this.isBlacklistedVideo(v));
-
-    this.renderVideoList(container, videos, { showRemove: true });
+      switch (platform) {
+        case 'youtube':
+          urlObj.searchParams.set('t', timestamp.toString());
+          return urlObj.toString();
+        case 'vimeo':
+          return url.split('#')[0] + `#t=${timestamp}s`;
+        case 'dailymotion':
+          urlObj.searchParams.set('start', timestamp.toString());
+          return urlObj.toString();
+        case 'twitch':
+          // Twitch VODs use ?t=XXhXXmXXs format
+          const hours = Math.floor(timestamp / 3600);
+          const minutes = Math.floor((timestamp % 3600) / 60);
+          const seconds = timestamp % 60;
+          let timeStr = '';
+          if (hours > 0) timeStr += `${hours}h`;
+          if (minutes > 0) timeStr += `${minutes}m`;
+          timeStr += `${seconds}s`;
+          urlObj.searchParams.set('t', timeStr);
+          return urlObj.toString();
+        default:
+          return url;
+      }
+    } catch (e) {
+      return url;
+    }
   }
 
   // Modal methods
@@ -659,7 +710,7 @@ class Vibrary {
     this.render();
   }
 
-  // Export/Import with blacklist support
+  // Export/Import with blacklist and timestamp support
   async exportData() {
     const exportData = {
       videos: this.videos,
@@ -669,7 +720,7 @@ class Vibrary {
         domains: this.blacklistedDomains
       },
       exportDate: new Date().toISOString(),
-      version: '2.1' // Updated version
+      version: '2.2' // Updated version
     };
 
     const dataStr = JSON.stringify(exportData, null, 2);
@@ -681,7 +732,10 @@ class Vibrary {
     a.click();
     URL.revokeObjectURL(url);
 
-    this.showNotification(`Exported ${Object.keys(this.videos).length} videos and ${Object.keys(this.playlists).length} playlists`);
+    // Show storage size
+    const size = new Blob([dataStr]).size;
+    const sizeKB = (size / 1024).toFixed(1);
+    this.showNotification(`Exported ${Object.keys(this.videos).length} videos (${sizeKB} KB)`);
   }
 
   showImportModal() {
