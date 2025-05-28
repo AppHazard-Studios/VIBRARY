@@ -16,6 +16,7 @@
 </div>
 
 <div class="content">
+  <!-- History Tab -->
   <div id="history" class="tab-content active">
     <div class="controls">
       <select id="rating-filter">
@@ -31,33 +32,29 @@
         <option value="date">Recent First</option>
         <option value="rating">By Rating</option>
       </select>
-      <button id="refresh-history" class="btn-small" title="Refresh history">↻</button>
+      <button id="refresh-history" class="btn-small" title="Refresh">↻</button>
       <button id="clear-history" class="btn-danger btn-small">Clear All</button>
     </div>
     <div id="history-list" class="video-list"></div>
   </div>
 
+  <!-- Playlists Tab -->
   <div id="playlists" class="tab-content">
     <div class="playlist-header">
       <button id="new-playlist" class="btn-primary">+ New Playlist</button>
       <div class="settings-container">
         <button id="settings-button" class="settings-button">⚙️</button>
         <div id="settings-menu" class="settings-menu">
-          <div class="settings-menu-item" data-action="export">
-            📤 Export Data
-          </div>
-          <div class="settings-menu-item" data-action="import">
-            📥 Import Data
-          </div>
-          <div class="settings-menu-item" data-action="blacklist">
-            🚫 Blacklist
-          </div>
+          <div class="settings-menu-item" data-action="export">📤 Export Data</div>
+          <div class="settings-menu-item" data-action="import">📥 Import Data</div>
+          <div class="settings-menu-item" data-action="blacklist">🚫 Blacklist</div>
         </div>
       </div>
     </div>
     <div id="playlist-list" class="playlist-list"></div>
   </div>
 
+  <!-- Individual Playlist View -->
   <div id="playlist-view" class="tab-content">
     <div class="playlist-header">
       <button id="back-btn" class="btn-back">← Back</button>
@@ -115,16 +112,14 @@
 </div>
 
 <!-- Blacklist Modal -->
-<div id="blacklist-modal" class="modal blacklist-modal">
+<div id="blacklist-modal" class="modal">
   <div class="modal-content">
     <h3>Manage Blacklist</h3>
     <p>Enter domains to block from history and playlists (one per line):</p>
-    <textarea id="blacklist-textarea" class="blacklist-textarea" placeholder="example.com&#10;another-site.com&#10;adult-site.org"></textarea>
-    <div class="blacklist-controls">
-      <div class="blacklist-enable" id="blacklist-enable">
-        <div class="blacklist-checkbox" id="blacklist-checkbox"></div>
-        <span>Enable Blacklist</span>
-      </div>
+    <textarea id="blacklist-textarea" rows="6" placeholder="example.com&#10;another-site.com&#10;adult-site.org" style="width: 100%; margin: 12px 0; padding: 8px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; font-family: monospace; font-size: 12px;"></textarea>
+    <div id="blacklist-toggle" class="blacklist-toggle">
+      <div class="blacklist-checkbox"></div>
+      <span>Enable Blacklist</span>
     </div>
     <div class="modal-actions">
       <button id="blacklist-save-btn" class="btn-primary">Save</button>

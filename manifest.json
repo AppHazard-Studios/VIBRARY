@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "VIBRARY",
-  "version": "2.2",
-  "description": "Track videos across the web with playlists, ratings, and resume playback",
+  "version": "2.3",
+  "description": "Track videos across the web with playlists, ratings, and smart detection",
   "permissions": ["storage", "unlimitedStorage", "activeTab", "scripting"],
   "host_permissions": ["<all_urls>"],
   "action": {
