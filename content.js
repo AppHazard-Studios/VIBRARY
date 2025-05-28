@@ -240,11 +240,14 @@ class SmartVideoDetector {
 
       if (!this.isValidTitle(title)) return;
 
-      await this.processVideo({
-        title: title,
-        thumbnail: this.getBestThumbnail(metadata.artwork),
-        source: 'media-session'
-      });
+      // Always add a small delay for media session to ensure URL has updated
+      setTimeout(() => {
+        this.processVideo({
+          title: title,
+          thumbnail: this.getBestThumbnail(metadata.artwork),
+          source: 'media-session'
+        });
+      }, 300);
 
     } catch (error) {
       console.error('VIBRARY: Media session error:', error);
@@ -274,12 +277,28 @@ class SmartVideoDetector {
   }
 
   isValidVideo(video) {
-    return !video.paused &&
-        video.currentTime > 0 &&
-        video.duration > 3 && // Minimum 3 seconds (was 20)
-        video.offsetWidth >= 120 &&
-        video.offsetHeight >= 90 &&
-        !this.isVideoAd(video);
+    // Basic checks
+    if (video.paused || video.currentTime <= 0 || video.duration <= 3) return false;
+    if (video.offsetWidth < 120 || video.offsetHeight < 90) return false;
+    if (this.isVideoAd(video)) return false;
+
+    // YouTube-specific checks to prevent home page captures
+    if (window.location.hostname.includes('youtube.com')) {
+      // Skip if we're on the home page and video is small (likely a preview)
+      if (window.location.pathname === '/' || window.location.pathname === '/feed/subscriptions') {
+        // Home page videos must be large (main player size) to be valid
+        if (video.offsetWidth < 640 || video.offsetHeight < 360) return false;
+
+        // Also check if it's in a preview container
+        const container = video.closest('ytd-rich-item-renderer, ytd-video-preview, ytd-thumbnail');
+        if (container) return false;
+      }
+
+      // For YouTube, require at least 2 seconds of playback
+      if (video.currentTime < 2) return false;
+    }
+
+    return true;
   }
 
   isVideoAd(video) {
@@ -303,12 +322,21 @@ class SmartVideoDetector {
   cleanTitle(title) {
     if (!title) return '';
 
+    // Handle beeg.com format: "Channel Name | Video Title"
+    if (window.location.hostname.includes('beeg.com') && title.includes(' | ')) {
+      const parts = title.split(' | ');
+      if (parts.length >= 2) {
+        // Return the part after the pipe (the actual video title)
+        return parts.slice(1).join(' | ').trim();
+      }
+    }
+
     // Remove common prefixes/suffixes that cause duplicates
     return title
         .replace(/^(YouTube|Vimeo|Dailymotion|Twitch)\s*[-–—]?\s*/i, '')
         .replace(/\s*[-–—]\s*(YouTube|Vimeo|Dailymotion|Twitch)$/i, '')
         .replace(/^\s*Watch\s*/i, '')
-        .replace(/\s*\|\s*.*$/, '') // Remove everything after pipe
+        .replace(/\s*\|\s*.*$/, '') // Remove everything after pipe (for other sites)
         .replace(/\s*-\s*YouTube$/, '')
         .trim();
   }
@@ -504,7 +532,26 @@ class SmartVideoDetector {
   }
 
   async processVideo(videoInfo) {
-    const currentUrl = this.normalizeUrl(window.location.href);
+    // Get the most specific URL possible
+    let currentUrl = window.location.href;
+
+    // Universal validation: Don't capture if we're on a base domain or home page
+    const url = new URL(currentUrl);
+    const pathname = url.pathname;
+
+    // Skip if we're on a home page or base domain (no meaningful path)
+    if (pathname === '/' || pathname === '/index.html' || pathname === '/home') {
+      console.log('VIBRARY: Skipping home page capture');
+      return;
+    }
+
+    // Skip if URL looks incomplete (no query params and very short path)
+    if (!url.search && pathname.length < 10 && !pathname.includes('/watch/') && !pathname.includes('/video/')) {
+      console.log('VIBRARY: Skipping - URL appears incomplete');
+      return;
+    }
+
+    currentUrl = this.normalizeUrl(currentUrl);
     const cleanTitle = videoInfo.title;
 
     // Enhanced deduplication key

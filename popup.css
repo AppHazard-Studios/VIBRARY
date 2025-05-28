@@ -619,6 +619,15 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 16px;
+  position: relative;
+  min-height: 300px;
+}
+
+/* When playlist-list contains only empty state, center it */
+.playlist-list:has(.empty-state) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .playlist-item {
@@ -694,16 +703,16 @@ body {
 }
 
 /* Empty State */
+/* Empty State */
 .empty-state {
-  text-align: center;
+  text-align:  center;
   color: var(--text-muted);
-  padding: 80px 24px;
+  padding: 60px 24px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: calc(100vh - 200px);
-  min-height: 200px;
+  min-height: 300px;
 }
 
 .empty-state h3 {
@@ -730,7 +739,7 @@ body {
   height: 100%;
   background: rgba(0, 0, 0, 0.85);
   backdrop-filter: blur(8px);
-  z-index: 1000;
+  z-index: 10000;
   align-items: center;
   justify-content: center;
 }
