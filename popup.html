@@ -21,18 +21,17 @@
     <div class="controls">
       <select id="rating-filter">
         <option value="all">All Videos</option>
-        <option value="5">★★★★★</option>
-        <option value="4">★★★★</option>
-        <option value="3">★★★</option>
-        <option value="2">★★</option>
-        <option value="1">★</option>
+        <option value="5">★★★★★ (5 stars)</option>
+        <option value="4">★★★★ (4 stars)</option>
+        <option value="3">★★★ (3 stars)</option>
+        <option value="2">★★ (2 stars)</option>
+        <option value="1">★ (1 star)</option>
         <option value="0">Unrated</option>
       </select>
       <select id="sort-by">
         <option value="date">Recent First</option>
         <option value="rating">By Rating</option>
       </select>
-      <button id="refresh-history" class="btn-small" title="Refresh">↻</button>
       <button id="clear-history" class="btn-danger btn-small">Clear All</button>
     </div>
     <div id="history-list" class="video-list"></div>
@@ -43,11 +42,11 @@
     <div class="playlist-header">
       <button id="new-playlist" class="btn-primary">+ New Playlist</button>
       <div class="settings-container">
-        <button id="settings-button" class="settings-button">⚙️</button>
+        <button id="settings-button" class="settings-button" title="Settings">⚙️</button>
         <div id="settings-menu" class="settings-menu">
           <div class="settings-menu-item" data-action="export">📤 Export Data</div>
           <div class="settings-menu-item" data-action="import">📥 Import Data</div>
-          <div class="settings-menu-item" data-action="blacklist">🚫 Blacklist</div>
+          <div class="settings-menu-item" data-action="blacklist">🚫 Manage Blacklist</div>
         </div>
       </div>
     </div>
@@ -57,7 +56,7 @@
   <!-- Individual Playlist View -->
   <div id="playlist-view" class="tab-content">
     <div class="playlist-header">
-      <button id="back-btn" class="btn-back">← Back</button>
+      <button id="back-btn" class="btn-back">← Back to Playlists</button>
       <h2 id="playlist-name" class="editable-title" title="Click to rename"></h2>
       <button id="delete-playlist-btn" class="btn-danger">Delete</button>
     </div>
@@ -71,14 +70,14 @@
     <h3>Rate Video</h3>
     <p id="rating-video-title"></p>
     <div class="star-rating">
-      <span class="star" data-rating="1">★</span>
-      <span class="star" data-rating="2">★</span>
-      <span class="star" data-rating="3">★</span>
-      <span class="star" data-rating="4">★</span>
-      <span class="star" data-rating="5">★</span>
+      <span class="star" data-rating="1" title="1 star">★</span>
+      <span class="star" data-rating="2" title="2 stars">★</span>
+      <span class="star" data-rating="3" title="3 stars">★</span>
+      <span class="star" data-rating="4" title="4 stars">★</span>
+      <span class="star" data-rating="5" title="5 stars">★</span>
     </div>
     <div class="modal-actions">
-      <button id="save-rating-btn" class="btn-primary">Save</button>
+      <button id="save-rating-btn" class="btn-primary">Save Rating</button>
       <button id="cancel-rating-btn" class="btn-secondary">Cancel</button>
     </div>
   </div>
@@ -92,7 +91,7 @@
     <button id="create-new-playlist" class="btn-primary btn-small" style="margin-bottom: 12px;">+ Create New Playlist</button>
     <div id="playlist-options" class="playlist-options"></div>
     <div class="modal-actions">
-      <button id="add-to-playlist-btn" class="btn-primary">Add</button>
+      <button id="add-to-playlist-btn" class="btn-primary">Add to Playlist</button>
       <button id="cancel-playlist-btn" class="btn-secondary">Cancel</button>
     </div>
   </div>
@@ -102,10 +101,10 @@
 <div id="import-modal" class="modal">
   <div class="modal-content">
     <h3>Import Data</h3>
-    <p>Paste your exported VIBRARY data below:</p>
-    <textarea id="import-data-text" rows="6" style="width: 100%; margin: 12px 0; padding: 8px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px;"></textarea>
+    <p>Select your VIBRARY backup file to import:</p>
+    <input type="file" id="import-file-input" accept=".json" style="width: 100%; margin: 16px 0; padding: 12px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer;">
     <div class="modal-actions">
-      <button id="import-confirm-btn" class="btn-primary">Import</button>
+      <button id="import-confirm-btn" class="btn-primary">Import Data</button>
       <button id="import-cancel-btn" class="btn-secondary">Cancel</button>
     </div>
   </div>
@@ -116,13 +115,13 @@
   <div class="modal-content">
     <h3>Manage Blacklist</h3>
     <p>Enter domains to block from history and playlists (one per line):</p>
-    <textarea id="blacklist-textarea" rows="6" placeholder="example.com&#10;another-site.com&#10;adult-site.org" style="width: 100%; margin: 12px 0; padding: 8px; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; font-family: monospace; font-size: 12px;"></textarea>
+    <textarea id="blacklist-textarea" rows="6" placeholder="example.com&#10;another-site.com&#10;adult-site.org"></textarea>
     <div id="blacklist-toggle" class="blacklist-toggle">
       <div class="blacklist-checkbox"></div>
       <span>Enable Blacklist</span>
     </div>
     <div class="modal-actions">
-      <button id="blacklist-save-btn" class="btn-primary">Save</button>
+      <button id="blacklist-save-btn" class="btn-primary">Save Changes</button>
       <button id="blacklist-cancel-btn" class="btn-secondary">Cancel</button>
     </div>
   </div>

@@ -1,21 +1,35 @@
 {
   "manifest_version": 3,
   "name": "VIBRARY",
-  "version": "2.3",
-  "description": "Track videos across the web with playlists, ratings, and smart detection",
-  "permissions": ["storage", "unlimitedStorage", "activeTab", "scripting"],
-  "host_permissions": ["<all_urls>"],
+  "version": "2.4.0",
+  "description": "Production-quality video tracking across the web with smart detection, playlists, ratings, and privacy-first design",
+  "author": "AppHazard Studios",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "VIBRARY - Video Library"
+    "default_title": "VIBRARY - Your Video Library"
   },
-  "content_scripts": [{
-    "matches": ["<all_urls>"],
-    "js": ["content.js"],
-    "run_at": "document_idle",
-    "all_frames": true
-  }],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
   "background": {
     "service_worker": "background.js"
-  }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+  "minimum_chrome_version": "88"
 }

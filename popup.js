@@ -29,11 +29,74 @@ class Vibrary {
       this.videos = result.videos || {};
       this.playlists = result.playlists || {};
 
+      // Clean up duplicates on load
+      await this.cleanupDuplicates();
+
       console.log('VIBRARY: Loaded', Object.keys(this.videos).length, 'videos');
     } catch (error) {
       console.error('Error loading data:', error);
       this.videos = {};
       this.playlists = {};
+    }
+  }
+
+  async cleanupDuplicates() {
+    const videos = this.videos;
+    const seenDedupeKeys = new Set();
+    const seenTitleUrl = new Set();
+    const toRemove = [];
+
+    for (const [videoId, video] of Object.entries(videos)) {
+      // Check dedupe key first (newer method)
+      if (video.dedupeKey) {
+        if (seenDedupeKeys.has(video.dedupeKey)) {
+          toRemove.push(videoId);
+          continue;
+        }
+        seenDedupeKeys.add(video.dedupeKey);
+      } else {
+        // Fallback to title+url for legacy entries
+        const titleUrlKey = `${video.title}::${this.normalizeUrl(video.url || '')}`;
+        if (seenTitleUrl.has(titleUrlKey)) {
+          toRemove.push(videoId);
+          continue;
+        }
+        seenTitleUrl.add(titleUrlKey);
+      }
+    }
+
+    if (toRemove.length > 0) {
+      console.log(`VIBRARY: Removing ${toRemove.length} duplicate videos`);
+      for (const videoId of toRemove) {
+        delete this.videos[videoId];
+
+        // Remove from playlists too
+        Object.keys(this.playlists).forEach(playlistName => {
+          this.playlists[playlistName] = this.playlists[playlistName].filter(id => id !== videoId);
+        });
+      }
+      await this.saveData();
+    }
+  }
+
+  normalizeUrl(url) {
+    try {
+      const urlObj = new URL(url);
+
+      // Remove tracking parameters
+      const paramsToRemove = [
+        'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
+        'fbclid', 'gclid', 'ref', 'source', 'tracking', 'track',
+        'gallery', 'edit', 'share', 'social', 'from', 'via'
+      ];
+
+      paramsToRemove.forEach(param => {
+        urlObj.searchParams.delete(param);
+      });
+
+      return urlObj.toString();
+    } catch (e) {
+      return url;
     }
   }
 
@@ -105,7 +168,6 @@ class Vibrary {
     // Controls
     document.getElementById('rating-filter').addEventListener('change', () => this.renderHistory());
     document.getElementById('sort-by').addEventListener('change', () => this.renderHistory());
-    document.getElementById('refresh-history').addEventListener('click', () => this.refreshHistory());
     document.getElementById('clear-history').addEventListener('click', () => this.clearHistory());
 
     // Playlists
@@ -283,13 +345,8 @@ class Vibrary {
           .find(video => video && !this.isBlacklisted(video));
 
       if (firstValidVideo?.thumbnail) {
-        thumbnail = `<img src="${firstValidVideo.thumbnail}" alt="">`;
+        thumbnail = `<img src="${firstValidVideo.thumbnail}" alt="" onerror="this.parentElement.innerHTML='🎬';">`;
       }
-
-      const validVideoCount = videoIds.filter(id => {
-        const video = this.videos[id];
-        return video && !this.isBlacklisted(video);
-      }).length;
 
       return `
         <div class="playlist-item" data-playlist="${this.escapeHtml(name)}">
@@ -298,7 +355,6 @@ class Vibrary {
           </div>
           <div class="playlist-info">
             <div class="playlist-name">${this.escapeHtml(name)}</div>
-            <div class="playlist-count">${validVideoCount} video${validVideoCount !== 1 ? 's' : ''}</div>
           </div>
         </div>
       `;
@@ -365,20 +421,18 @@ class Vibrary {
     }
 
     container.innerHTML = videos.map(video => {
-      const date = new Date(video.watchedAt).toLocaleDateString();
-      const rating = video.rating > 0 ? '★'.repeat(video.rating) + '☆'.repeat(5 - video.rating) : 'Unrated';
       const timeAgo = this.getTimeAgo(video.watchedAt);
+      const rating = this.formatRating(video.rating);
+      const thumbnailHtml = this.getThumbnailHtml(video);
 
       return `
         <div class="video-item">
           <div class="video-header" data-url="${this.escapeHtml(video.url)}">
-            <div class="video-thumbnail">
-              ${video.thumbnail ? `<img src="${video.thumbnail}" alt="">` : '📺'}
-            </div>
+            ${thumbnailHtml}
             <div class="video-info">
               <div class="video-title">${this.escapeHtml(video.title)}</div>
               <div class="video-meta">
-                ${video.favicon ? `<img src="${video.favicon}" class="site-favicon" alt="">` : '🌐'}
+                ${this.getFaviconHtml(video)}
                 <span class="video-website">${this.escapeHtml(video.website || 'Unknown')}</span>
                 <span class="video-date">${timeAgo}</span>
               </div>
@@ -397,6 +451,36 @@ class Vibrary {
 
     // Bind video action events
     this.bindVideoActions(container);
+  }
+
+  getThumbnailHtml(video) {
+    if (video.thumbnail && video.thumbnail.startsWith('data:image')) {
+      return `
+        <div class="video-thumbnail">
+          <img src="${video.thumbnail}" alt="" onerror="this.parentElement.classList.add('no-image'); this.style.display='none';">
+        </div>
+      `;
+    } else if (video.thumbnail && video.thumbnail.startsWith('http')) {
+      return `
+        <div class="video-thumbnail">
+          <img src="${video.thumbnail}" alt="" onerror="this.parentElement.classList.add('no-image'); this.style.display='none';">
+        </div>
+      `;
+    } else {
+      return `<div class="video-thumbnail no-image"></div>`;
+    }
+  }
+
+  getFaviconHtml(video) {
+    if (video.favicon && video.favicon.startsWith('http')) {
+      return `<img src="${video.favicon}" class="site-favicon" alt="" onerror="this.style.display='none';">`;
+    }
+    return '🌐';
+  }
+
+  formatRating(rating) {
+    if (!rating || rating === 0) return 'Unrated';
+    return '★'.repeat(rating) + '☆'.repeat(5 - rating);
   }
 
   bindVideoActions(container) {
@@ -532,35 +616,52 @@ class Vibrary {
 
   async createPlaylist() {
     const name = prompt('Enter playlist name:');
-    if (!name || this.playlists[name]) return;
+    if (!name?.trim() || this.playlists[name.trim()]) {
+      if (this.playlists[name?.trim()]) {
+        this.showNotification('Playlist already exists!');
+      }
+      return;
+    }
 
-    this.playlists[name] = [];
+    this.playlists[name.trim()] = [];
     await this.saveData();
     this.renderPlaylistsList();
+    this.showNotification(`Created playlist "${name.trim()}"`);
   }
 
   async createPlaylistInModal() {
     const name = prompt('Enter new playlist name:');
-    if (!name || this.playlists[name]) return;
+    if (!name?.trim() || this.playlists[name.trim()]) {
+      if (this.playlists[name?.trim()]) {
+        this.showNotification('Playlist already exists!');
+      }
+      return;
+    }
 
-    this.playlists[name] = [];
+    this.playlists[name.trim()] = [];
     await this.saveData();
     this.renderPlaylistOptions();
-    this.selectPlaylist(name);
+    this.selectPlaylist(name.trim());
   }
 
   async renameCurrentPlaylist() {
     if (!this.currentPlaylist) return;
 
     const newName = prompt('Enter new playlist name:', this.currentPlaylist);
-    if (!newName || newName === this.currentPlaylist || this.playlists[newName]) return;
+    if (!newName?.trim() || newName.trim() === this.currentPlaylist || this.playlists[newName.trim()]) {
+      if (this.playlists[newName?.trim()]) {
+        this.showNotification('Playlist name already exists!');
+      }
+      return;
+    }
 
-    this.playlists[newName] = this.playlists[this.currentPlaylist];
+    this.playlists[newName.trim()] = this.playlists[this.currentPlaylist];
     delete this.playlists[this.currentPlaylist];
-    this.currentPlaylist = newName;
+    this.currentPlaylist = newName.trim();
 
     await this.saveData();
-    document.getElementById('playlist-name').textContent = newName;
+    document.getElementById('playlist-name').textContent = newName.trim();
+    this.showNotification(`Renamed to "${newName.trim()}"`);
   }
 
   async deleteCurrentPlaylist() {
@@ -569,6 +670,7 @@ class Vibrary {
     delete this.playlists[this.currentPlaylist];
     await this.saveData();
     this.showPlaylists();
+    this.showNotification('Playlist deleted');
   }
 
   async removeFromCurrentPlaylist(videoId) {
@@ -577,6 +679,7 @@ class Vibrary {
     this.playlists[this.currentPlaylist] = this.playlists[this.currentPlaylist].filter(id => id !== videoId);
     await this.saveData();
     this.renderPlaylistView();
+    this.showNotification('Removed from playlist');
   }
 
   async deleteVideo(videoId) {
@@ -591,6 +694,7 @@ class Vibrary {
 
     await this.saveData();
     this.render();
+    this.showNotification('Video deleted');
   }
 
   async clearHistory() {
@@ -600,6 +704,7 @@ class Vibrary {
     this.playlists = {};
     await this.saveData();
     this.render();
+    this.showNotification('History cleared');
   }
 
   // Import/Export functionality
@@ -609,7 +714,7 @@ class Vibrary {
       playlists: this.playlists,
       settings: this.settings,
       exportDate: new Date().toISOString(),
-      version: '2.3'
+      version: '2.4'
     };
 
     const dataStr = JSON.stringify(exportData, null, 2);
@@ -627,15 +732,27 @@ class Vibrary {
 
   showImportModal() {
     this.showModal('import-modal');
-    document.getElementById('import-data-text').value = '';
+    const fileInput = document.getElementById('import-file-input');
+    fileInput.value = ''; // Clear any previous selection
   }
 
   async importData() {
-    const importText = document.getElementById('import-data-text').value.trim();
-    if (!importText) return;
+    const fileInput = document.getElementById('import-file-input');
+    const file = fileInput.files[0];
+
+    if (!file) {
+      alert('Please select a file to import.');
+      return;
+    }
+
+    if (!file.name.endsWith('.json')) {
+      alert('Please select a valid JSON file.');
+      return;
+    }
 
     try {
-      const importData = JSON.parse(importText);
+      const fileContent = await this.readFileAsText(file);
+      const importData = JSON.parse(fileContent);
 
       if (!importData.videos || !importData.playlists) {
         alert('Invalid VIBRARY export data!');
@@ -654,15 +771,25 @@ class Vibrary {
       }
 
       await this.saveData();
+      await this.cleanupDuplicates(); // Clean up after import
       this.render();
 
       this.closeModal('import-modal');
       this.showNotification(`Imported ${videoCount} videos successfully`);
 
     } catch (error) {
-      alert('Error parsing import data. Please check the format.');
+      alert('Error reading or parsing the file. Please check that it\'s a valid VIBRARY backup.');
       console.error('Import error:', error);
     }
+  }
+
+  readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target.result);
+      reader.onerror = (e) => reject(e);
+      reader.readAsText(file);
+    });
   }
 
   // Blacklist functionality
@@ -701,21 +828,6 @@ class Vibrary {
   }
 
   // Utility methods
-  async refreshHistory() {
-    const button = document.getElementById('refresh-history');
-    const originalText = button.textContent;
-    button.textContent = '⟳';
-    button.disabled = true;
-
-    await this.loadData();
-    this.render();
-
-    setTimeout(() => {
-      button.textContent = originalText;
-      button.disabled = false;
-    }, 1000);
-  }
-
   getTimeAgo(timestamp) {
     const diff = Date.now() - timestamp;
     const minutes = Math.floor(diff / 60000);
@@ -741,11 +853,12 @@ class Vibrary {
   showNotification(message) {
     const notification = document.createElement('div');
     notification.style.cssText = `
-      position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+      position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
       background: linear-gradient(135deg, var(--success), #00cc55);
-      color: white; padding: 12px 20px; border-radius: 8px;
-      font-size: 13px; font-weight: 600; z-index: 10000;
-      box-shadow: 0 4px 20px rgba(0, 170, 68, 0.3);
+      color: white; padding: 12px 24px; border-radius: 12px;
+      font-size: 14px; font-weight: 600; z-index: 10000;
+      box-shadow: 0 8px 32px rgba(16, 185, 129, 0.4);
+      backdrop-filter: blur(8px);
     `;
     notification.textContent = message;
 
@@ -753,7 +866,9 @@ class Vibrary {
 
     setTimeout(() => {
       if (notification.parentNode) {
-        notification.remove();
+        notification.style.transform = 'translateX(-50%) translateY(-20px)';
+        notification.style.opacity = '0';
+        setTimeout(() => notification.remove(), 200);
       }
     }, 2500);
   }
