@@ -1,25 +1,64 @@
-// VIBRARY Content Script - Production Quality Detection
+// VIBRARY Content Script - Smart Thumbnail Capture System
 class SmartVideoDetector {
   constructor() {
     this.detectedVideos = new Set();
     this.pendingCaptures = new Map();
     this.mediaCheckInterval = null;
     this.videoCheckInterval = null;
-    this.iframeWatcher = null;
+    this.userEngagementScore = 0;
+    this.lastInteractionTime = 0;
+    this.debounceTimeout = null;
+    this.processingCooldown = new Set();
+    this.thumbnailCaptureQueue = new Map();
     this.init();
   }
 
   init() {
-    console.log('🎬 VIBRARY: Enhanced video detector initialized');
+    console.log('🎬 VIBRARY: Smart video detector with intelligent thumbnails initialized');
+
+    // Universal user engagement tracking
+    this.setupUniversalEngagementTracking();
 
     // Primary: Media Session API
     this.setupMediaSessionDetection();
 
-    // Secondary: Video element detection with iframe support
-    this.setupVideoElementDetection();
+    // Secondary: Universal video element detection
+    this.setupUniversalVideoDetection();
 
-    // Tertiary: Iframe and shadow DOM detection
+    // Tertiary: Advanced detection for complex sites
     this.setupAdvancedDetection();
+  }
+
+  setupUniversalEngagementTracking() {
+    // Track meaningful user interactions across all platforms
+    const engagementEvents = {
+      'click': 3,        // User clicked
+      'keydown': 2,      // User pressed key
+      'wheel': 1,        // User scrolled
+      'touchstart': 3,   // User touched (mobile)
+      'fullscreenchange': 5, // User went fullscreen
+      'focus': 1         // Element focused
+    };
+
+    Object.entries(engagementEvents).forEach(([event, score]) => {
+      document.addEventListener(event, (e) => {
+        this.userEngagementScore += score;
+        this.lastInteractionTime = Date.now();
+
+        // Boost engagement for video-related interactions
+        if (e.target.tagName === 'VIDEO' || e.target.closest('video')) {
+          this.userEngagementScore += score * 2;
+        }
+      }, { passive: true });
+    });
+
+    // Decay engagement score over time
+    setInterval(() => {
+      const timeSinceInteraction = Date.now() - this.lastInteractionTime;
+      if (timeSinceInteraction > 10000) { // 10 seconds
+        this.userEngagementScore = Math.max(0, this.userEngagementScore - 1);
+      }
+    }, 5000);
   }
 
   setupMediaSessionDetection() {
@@ -27,41 +66,45 @@ class SmartVideoDetector {
 
     this.mediaCheckInterval = setInterval(() => {
       this.checkMediaSession();
-    }, 2500);
+    }, 3000);
 
     setTimeout(() => this.checkMediaSession(), 800);
   }
 
-  setupVideoElementDetection() {
+  setupUniversalVideoDetection() {
     this.videoCheckInterval = setInterval(() => {
       this.checkVideoElements();
     }, 4000);
 
-    // Enhanced event listeners
-    ['play', 'loadedmetadata', 'canplay'].forEach(event => {
+    // Universal video event listeners
+    ['play', 'loadedmetadata', 'canplay', 'timeupdate'].forEach(event => {
       document.addEventListener(event, (e) => {
         if (e.target.tagName === 'VIDEO') {
-          setTimeout(() => this.checkVideoElements(), 1200);
+          this.debounceVideoCheck(1500);
         }
       }, true);
     });
   }
 
+  debounceVideoCheck(delay) {
+    if (this.debounceTimeout) clearTimeout(this.debounceTimeout);
+
+    this.debounceTimeout = setTimeout(() => {
+      this.checkVideoElements();
+    }, delay);
+  }
+
   setupAdvancedDetection() {
-    // Enhanced detection for complex sites like HQPorna
     const observer = new MutationObserver((mutations) => {
       mutations.forEach(mutation => {
         mutation.addedNodes.forEach(node => {
           if (node.nodeType === Node.ELEMENT_NODE) {
-            // Check for iframes
             if (node.tagName === 'IFRAME') {
               this.setupIframeWatcher(node);
             }
-            // Check for shadow DOM hosts
             if (node.shadowRoot) {
               this.setupShadowDOMWatcher(node.shadowRoot);
             }
-            // Check for elements that might contain videos
             if (node.querySelectorAll) {
               const iframes = node.querySelectorAll('iframe');
               iframes.forEach(iframe => this.setupIframeWatcher(iframe));
@@ -85,35 +128,29 @@ class SmartVideoDetector {
       attributeFilter: ['src', 'data-src']
     });
 
-    // Initial scan for existing content
+    // Initial scan
     document.querySelectorAll('iframe').forEach(iframe => {
       this.setupIframeWatcher(iframe);
     });
 
-    // Scan for shadow DOM
     document.querySelectorAll('*').forEach(element => {
       if (element.shadowRoot) {
         this.setupShadowDOMWatcher(element.shadowRoot);
       }
     });
-
-    // Enhanced detection for dynamically loaded content
-    this.setupDeepContentDetection();
   }
 
   setupShadowDOMWatcher(shadowRoot) {
     try {
-      // Watch for videos within shadow DOM
       const videos = shadowRoot.querySelectorAll('video');
       videos.forEach(video => {
         ['play', 'loadedmetadata', 'canplay'].forEach(event => {
           video.addEventListener(event, () => {
-            setTimeout(() => this.checkVideoElements(), 800);
+            this.debounceVideoCheck(1000);
           });
         });
       });
 
-      // Set up observer for shadow DOM changes
       const shadowObserver = new MutationObserver(() => {
         const newVideos = shadowRoot.querySelectorAll('video');
         newVideos.forEach(video => {
@@ -121,7 +158,7 @@ class SmartVideoDetector {
             video.hasVibraryListener = true;
             ['play', 'loadedmetadata'].forEach(event => {
               video.addEventListener(event, () => {
-                setTimeout(() => this.checkVideoElements(), 800);
+                this.debounceVideoCheck(1000);
               });
             });
           }
@@ -137,52 +174,14 @@ class SmartVideoDetector {
     }
   }
 
-  setupDeepContentDetection() {
-    // Enhanced detection for complex loading patterns
-    const deepCheck = () => {
-      // Check all possible video containers
-      const containers = document.querySelectorAll('div, section, article, main, [data-player], [data-video]');
-      containers.forEach(container => {
-        const videos = container.querySelectorAll('video');
-        videos.forEach(video => {
-          if (!video.hasVibraryListener) {
-            video.hasVibraryListener = true;
-            ['play', 'loadedmetadata', 'canplay', 'timeupdate'].forEach(event => {
-              video.addEventListener(event, () => {
-                if (event.type === 'timeupdate' && video.currentTime > 1) {
-                  // For sites that only update on timeupdate
-                  setTimeout(() => this.checkVideoElements(), 500);
-                } else {
-                  setTimeout(() => this.checkVideoElements(), 1000);
-                }
-              });
-            });
-          }
-        });
-      });
-    };
-
-    // Run deep check periodically
-    setInterval(deepCheck, 5000);
-
-    // Run deep check on page interactions
-    ['click', 'scroll', 'focus'].forEach(event => {
-      document.addEventListener(event, () => {
-        setTimeout(deepCheck, 2000);
-      }, { passive: true });
-    });
-  }
-
   setupIframeWatcher(iframe) {
     try {
-      // For same-origin iframes, inject detection
       if (this.isSameOrigin(iframe.src)) {
         iframe.addEventListener('load', () => {
           try {
             const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
             this.injectIframeDetection(iframeDoc);
           } catch (e) {
-            // Cross-origin, use message passing
             this.setupCrossOriginDetection(iframe);
           }
         });
@@ -207,28 +206,26 @@ class SmartVideoDetector {
     videos.forEach(video => {
       ['play', 'loadedmetadata'].forEach(event => {
         video.addEventListener(event, () => {
-          setTimeout(() => this.checkVideoElements(), 1000);
+          this.debounceVideoCheck(1500);
         });
       });
     });
   }
 
   setupCrossOriginDetection(iframe) {
-    // Listen for media session changes that might indicate iframe video
     const checkMediaFromIframe = () => {
       if (navigator.mediaSession?.metadata?.title) {
-        setTimeout(() => this.checkMediaSession(), 500);
+        this.debounceVideoCheck(800);
       }
     };
 
     iframe.addEventListener('focus', checkMediaFromIframe);
 
-    // Periodic check when iframe might be active
     setInterval(() => {
       if (document.activeElement === iframe) {
         checkMediaFromIframe();
       }
-    }, 3000);
+    }, 4000);
   }
 
   async checkMediaSession() {
@@ -240,14 +237,21 @@ class SmartVideoDetector {
 
       if (!this.isValidTitle(title)) return;
 
-      // Always add a small delay for media session to ensure URL has updated
+      const dedupeKey = this.generateDedupeKey(title, window.location.href);
+      if (this.processingCooldown.has(dedupeKey)) return;
+
+      this.processingCooldown.add(dedupeKey);
+      setTimeout(() => {
+        this.processingCooldown.delete(dedupeKey);
+      }, 6000);
+
       setTimeout(() => {
         this.processVideo({
           title: title,
           thumbnail: this.getBestThumbnail(metadata.artwork),
           source: 'media-session'
         });
-      }, 300);
+      }, 500);
 
     } catch (error) {
       console.error('VIBRARY: Media session error:', error);
@@ -259,7 +263,7 @@ class SmartVideoDetector {
       const videos = document.querySelectorAll('video');
 
       for (const video of videos) {
-        if (this.isValidVideo(video)) {
+        if (await this.isValidUniversalVideo(video)) {
           const title = this.extractVideoTitle(video);
           if (this.isValidTitle(title)) {
             await this.processVideo({
@@ -267,7 +271,7 @@ class SmartVideoDetector {
               video: video,
               source: 'video-element'
             });
-            break; // Process one at a time to avoid spam
+            break;
           }
         }
       }
@@ -276,104 +280,158 @@ class SmartVideoDetector {
     }
   }
 
-  isValidVideo(video) {
-    // Basic checks
-    if (video.paused || video.currentTime <= 0 || video.duration <= 3) return false;
-    if (video.offsetWidth < 120 || video.offsetHeight < 90) return false;
-    if (this.isVideoAd(video)) return false;
+  async isValidUniversalVideo(video) {
+    // Universal validation that works across all platforms
 
-    // YouTube-specific checks to prevent home page captures
-    if (window.location.hostname.includes('youtube.com')) {
-      // Skip if we're on the home page and video is small (likely a preview)
-      if (window.location.pathname === '/' || window.location.pathname === '/feed/subscriptions') {
-        // Home page videos must be large (main player size) to be valid
-        if (video.offsetWidth < 640 || video.offsetHeight < 360) return false;
+    // Basic technical requirements
+    if (video.paused || video.currentTime <= 0 || video.duration <= 1) return false;
+    if (video.offsetWidth < 100 || video.offsetHeight < 80) return false;
 
-        // Also check if it's in a preview container
-        const container = video.closest('ytd-rich-item-renderer, ytd-video-preview, ytd-thumbnail');
-        if (container) return false;
-      }
+    // Universal preview detection (skip tiny videos, overlays, etc.)
+    if (this.isUniversalPreview(video)) {
+      console.log('VIBRARY: Skipping preview video');
+      return false;
+    }
 
-      // For YouTube, require at least 2 seconds of playback
-      if (video.currentTime < 2) return false;
+    // Universal user engagement check
+    if (!this.hasValidUserEngagement()) {
+      console.log('VIBRARY: Insufficient user engagement');
+      return false;
+    }
+
+    // Adaptive duration requirements based on video length
+    const requiredWatchTime = this.calculateRequiredWatchTime(video.duration);
+    if (video.currentTime < requiredWatchTime) {
+      console.log(`VIBRARY: Need ${requiredWatchTime}s watch time, currently ${video.currentTime}s`);
+      return false;
+    }
+
+    // Universal content quality check
+    if (!await this.isQualityContent(video)) {
+      console.log('VIBRARY: Low quality content detected');
+      return false;
     }
 
     return true;
   }
 
-  isVideoAd(video) {
-    // Detect common ad indicators
-    const adIndicators = [
-      'advertisement', 'ad-', 'doubleclick', 'googlesyndication',
-      'ads-', 'preroll', 'midroll', 'commercial'
+  isUniversalPreview(video) {
+    // Universal preview detection across all platforms
+
+    // 1. Check for preview-related attributes
+    const previewIndicators = [
+      'preview', 'thumbnail', 'hover', 'teaser', 'trailer-preview'
     ];
 
-    const videoSrc = video.src || video.currentSrc || '';
     const videoClasses = video.className.toLowerCase();
     const videoId = video.id.toLowerCase();
+    const parentClasses = video.parentElement?.className.toLowerCase() || '';
 
-    return adIndicators.some(indicator =>
-        videoSrc.includes(indicator) ||
+    const hasPreviewIndicator = previewIndicators.some(indicator =>
         videoClasses.includes(indicator) ||
-        videoId.includes(indicator)
+        videoId.includes(indicator) ||
+        parentClasses.includes(indicator)
+    );
+
+    if (hasPreviewIndicator) return true;
+
+    // 2. Check for small size (likely thumbnails)
+    if (video.offsetWidth < 200 && video.offsetHeight < 150) return true;
+
+    // 3. Check for muted autoplay (common for previews)
+    if (video.muted && video.autoplay && video.currentTime < 2) return true;
+
+    // 4. Check positioning (previews often positioned absolutely)
+    const computedStyle = window.getComputedStyle(video);
+    if (computedStyle.position === 'absolute' && video.offsetWidth < 300) return true;
+
+    return false;
+  }
+
+  hasValidUserEngagement() {
+    // Universal user engagement validation
+
+    // Recent interaction required
+    const timeSinceInteraction = Date.now() - this.lastInteractionTime;
+    if (timeSinceInteraction > 30000) return false; // 30 seconds
+
+    // Minimum engagement score
+    if (this.userEngagementScore < 3) return false;
+
+    return true;
+  }
+
+  calculateRequiredWatchTime(totalDuration) {
+    // Adaptive watch time requirements based on video length
+
+    if (totalDuration <= 5) return 1;     // Very short (TikTok, Instagram Stories): 1 second
+    if (totalDuration <= 15) return 2;    // Short (Instagram Reels, YouTube Shorts): 2 seconds
+    if (totalDuration <= 60) return 3;    // Medium short: 3 seconds
+    if (totalDuration <= 300) return 5;   // Medium: 5 seconds
+    return Math.min(10, totalDuration * 0.05); // Long videos: 5% or max 10 seconds
+  }
+
+  async isQualityContent(video) {
+    // Universal content quality validation
+
+    // 1. Check if video has reasonable dimensions
+    if (video.videoWidth < 160 || video.videoHeight < 120) return false;
+
+    // 2. Check if video appears to be playing intentionally
+    const isIntentionalPlay = video.currentTime > 0 && !video.paused;
+
+    // 3. Check for reasonable duration (not too short to be accidental)
+    const hasReasonableDuration = video.duration >= 1; // At least 1 second
+
+    // 4. Check if video is in viewport (user can see it)
+    const isInViewport = this.isVideoInViewport(video);
+
+    return hasReasonableDuration && isIntentionalPlay && isInViewport;
+  }
+
+  isVideoInViewport(video) {
+    const rect = video.getBoundingClientRect();
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+
+    return (
+        rect.top >= 0 &&
+        rect.left >= 0 &&
+        rect.bottom <= viewportHeight &&
+        rect.right <= viewportWidth &&
+        rect.width > 0 &&
+        rect.height > 0
     );
   }
 
   cleanTitle(title) {
     if (!title) return '';
 
-    // Handle beeg.com format: "Channel Name | Video Title"
-    if (window.location.hostname.includes('beeg.com') && title.includes(' | ')) {
-      const parts = title.split(' | ');
-      if (parts.length >= 2) {
-        // Return the part after the pipe (the actual video title)
-        return parts.slice(1).join(' | ').trim();
-      }
-    }
-
-    // Remove common prefixes/suffixes that cause duplicates
+    // Universal title cleaning (not platform-specific)
     return title
-        .replace(/^(YouTube|Vimeo|Dailymotion|Twitch)\s*[-–—]?\s*/i, '')
-        .replace(/\s*[-–—]\s*(YouTube|Vimeo|Dailymotion|Twitch)$/i, '')
-        .replace(/^\s*Watch\s*/i, '')
-        .replace(/\s*\|\s*.*$/, '') // Remove everything after pipe (for other sites)
-        .replace(/\s*-\s*YouTube$/, '')
+        .replace(/^(Watch|Video|Play)\s*/i, '')
+        .replace(/\s*[-|]\s*(YouTube|Vimeo|Dailymotion|Twitch|TikTok|Instagram).*$/i, '')
+        .replace(/\s*\|\s*.*$/, '')
         .trim();
   }
 
   extractVideoTitle(video) {
-    // Priority order: actual video title sources first, then fallbacks
+    // Universal title extraction
     const titleSources = [
-      // Primary: Video element attributes
       () => video.title,
       () => video.getAttribute('aria-label'),
-
-      // Secondary: Page metadata (video-specific)
+      () => video.getAttribute('alt'),
       () => document.querySelector('[property="og:title"]')?.content,
       () => document.querySelector('[name="twitter:title"]')?.content,
-
-      // Tertiary: Page title (cleaned)
-      () => this.getPageTitle(),
-
-      // Last resort: Header elements (but avoid author names)
-      () => {
-        const h1 = document.querySelector('h1');
-        if (h1) {
-          const text = h1.textContent?.trim();
-          // Avoid common author/channel patterns
-          if (text && !this.looksLikeAuthorName(text)) {
-            return text;
-          }
-        }
-        return null;
-      }
+      () => document.querySelector('title')?.textContent,
+      () => document.querySelector('h1')?.textContent?.trim()
     ];
 
     for (const source of titleSources) {
       try {
         const title = source();
         const cleaned = this.cleanTitle(title);
-        if (this.isValidTitle(cleaned) && !this.looksLikeAuthorName(cleaned)) {
+        if (this.isValidTitle(cleaned)) {
           return cleaned;
         }
       } catch (e) {
@@ -383,36 +441,12 @@ class SmartVideoDetector {
     return null;
   }
 
-  looksLikeAuthorName(text) {
-    if (!text || text.length < 3) return false;
-
-    // Simple patterns that indicate author/channel names
-    if (text.startsWith('@')) return true;
-    if (text.startsWith('by ')) return true;
-    if (text.endsWith(' - YouTube')) return true;
-    if (text.endsWith('Channel')) return true;
-
-    // Very short single words are likely not video titles
-    if (text.length < 8 && !text.includes(' ')) return true;
-
-    return false;
-  }
-
-  getPageTitle() {
-    return document.title
-        .replace(/ - YouTube$/, '')
-        .replace(/ on Vimeo$/, '')
-        .replace(/ \| Dailymotion$/, '')
-        .replace(/ - Twitch$/, '');
-  }
-
   isValidTitle(title) {
-    if (!title || title.length < 3) return false;
+    if (!title || title.length < 2) return false;
 
     const badPatterns = /^(loading|untitled|player|debug|error|404|undefined|null|watch|video)$/i;
-    const genericPatterns = /^(youtube|vimeo|dailymotion|twitch|video player)$/i;
 
-    return !badPatterns.test(title.trim()) && !genericPatterns.test(title.trim());
+    return !badPatterns.test(title.trim());
   }
 
   getBestThumbnail(artwork) {
@@ -431,6 +465,177 @@ class SmartVideoDetector {
     return match ? parseInt(match[1]) * parseInt(match[2]) : 0;
   }
 
+  // SMART THUMBNAIL CAPTURE SYSTEM
+  // The key innovation: Instead of detecting ads, be smart about WHEN we capture thumbnails
+
+  async captureSmartThumbnails(video) {
+    const duration = video.duration;
+    const videoId = this.getVideoIdentifier(video);
+
+    // Immediate fallback capture
+    let thumbnails = [];
+    const immediateThumbnail = await this.captureVideoThumbnail(video, 0);
+    if (immediateThumbnail) {
+      thumbnails.push({
+        thumbnail: immediateThumbnail,
+        captureTime: video.currentTime,
+        quality: 'immediate'
+      });
+    }
+
+    // Schedule smart captures based on video length
+    this.scheduleSmartCaptures(video, videoId, thumbnails, duration);
+
+    return immediateThumbnail; // Return immediate thumbnail for now
+  }
+
+  scheduleSmartCaptures(video, videoId, thumbnails, duration) {
+    // Clear any existing captures for this video
+    if (this.thumbnailCaptureQueue.has(videoId)) {
+      this.thumbnailCaptureQueue.get(videoId).forEach(timeout => clearTimeout(timeout));
+    }
+
+    const timeouts = [];
+
+    if (duration <= 15) {
+      // Very short videos (TikTok, Reels, Shorts) - likely no ads
+      // Capture at 25% and 75% through the video
+      timeouts.push(setTimeout(() => this.enhanceThumbnail(video, videoId, thumbnails, duration * 0.25), duration * 250));
+      timeouts.push(setTimeout(() => this.enhanceThumbnail(video, videoId, thumbnails, duration * 0.75), duration * 750));
+
+    } else if (duration <= 120) {
+      // Medium videos (up to 2 minutes) - potential short ads
+      // Wait 8-12 seconds to skip potential pre-roll, then capture multiple points
+      timeouts.push(setTimeout(() => this.enhanceThumbnail(video, videoId, thumbnails, 8), 8000));
+      timeouts.push(setTimeout(() => this.enhanceThumbnail(video, videoId, thumbnails, 15), 15000));
+      timeouts.push(setTimeout(() => this.enhanceThumbnail(video, videoId, thumbnails, duration * 0.5), duration * 500));
+
+    } else {
+      // Long videos (over 2 minutes) - potential longer ads
+      // Wait 15-25 seconds to skip pre-roll ads, then capture strategic points
+      timeouts.push(setTimeout(() => this.enhanceThumbnail(video, videoId, thumbnails, 15), 15000));
+      timeouts.push(setTimeout(() => this.enhanceThumbnail(video, videoId, thumbnails, 25), 25000));
+      timeouts.push(setTimeout(() => this.enhanceThumbnail(video, videoId, thumbnails, 45), 45000));
+      timeouts.push(setTimeout(() => this.enhanceThumbnail(video, videoId, thumbnails, duration * 0.3), duration * 300));
+    }
+
+    // Final quality check and best thumbnail selection
+    timeouts.push(setTimeout(() => this.finalizeBestThumbnail(video, videoId, thumbnails), Math.min(60000, duration * 1000)));
+
+    this.thumbnailCaptureQueue.set(videoId, timeouts);
+  }
+
+  async enhanceThumbnail(video, videoId, thumbnails, targetTime) {
+    try {
+      // Check if video is still playing and at reasonable time
+      if (video.paused || video.ended || video.currentTime < targetTime - 5) return;
+
+      const thumbnail = await this.captureVideoThumbnail(video, 0);
+      if (thumbnail) {
+        thumbnails.push({
+          thumbnail: thumbnail,
+          captureTime: video.currentTime,
+          quality: await this.analyzeThumbnailQuality(thumbnail)
+        });
+
+        console.log(`VIBRARY: Enhanced thumbnail captured at ${video.currentTime}s`);
+      }
+    } catch (error) {
+      console.error('VIBRARY: Enhanced thumbnail capture failed:', error);
+    }
+  }
+
+  async finalizeBestThumbnail(video, videoId, thumbnails) {
+    if (thumbnails.length <= 1) return; // No enhancement needed
+
+    // Select the best quality thumbnail
+    const bestThumbnail = thumbnails.reduce((best, current) => {
+      if (current.quality > best.quality) return current;
+      if (current.quality === best.quality && current.captureTime > best.captureTime) return current;
+      return best;
+    });
+
+    if (bestThumbnail.quality > thumbnails[0].quality) {
+      // Update the stored video with the better thumbnail
+      const dedupeKey = this.generateDedupeKey(this.extractVideoTitle(video), window.location.href);
+      await this.updateVideoThumbnail(dedupeKey, bestThumbnail.thumbnail);
+      console.log(`VIBRARY: Updated to better quality thumbnail (quality: ${bestThumbnail.quality})`);
+    }
+
+    // Clean up
+    this.thumbnailCaptureQueue.delete(videoId);
+  }
+
+  async analyzeThumbnailQuality(thumbnailDataUrl) {
+    // Simple thumbnail quality analysis
+    try {
+      const img = new Image();
+      img.src = thumbnailDataUrl;
+
+      return new Promise((resolve) => {
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const quality = this.calculateImageQuality(imageData);
+          resolve(quality);
+        };
+        img.onerror = () => resolve(0);
+      });
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  calculateImageQuality(imageData) {
+    const data = imageData.data;
+    let totalVariance = 0;
+    let validPixels = 0;
+    let averageBrightness = 0;
+
+    // Calculate variance (higher variance = more detail = better quality)
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const brightness = (r + g + b) / 3;
+
+      averageBrightness += brightness;
+      validPixels++;
+    }
+
+    averageBrightness /= validPixels;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const brightness = (r + g + b) / 3;
+
+      totalVariance += Math.pow(brightness - averageBrightness, 2);
+    }
+
+    const variance = totalVariance / validPixels;
+
+    // Quality score: higher variance is better, but penalize extreme brightness
+    let quality = Math.min(variance / 100, 10); // Scale to 0-10
+
+    // Penalize completely black or white images
+    if (averageBrightness < 20 || averageBrightness > 235) {
+      quality *= 0.5;
+    }
+
+    return quality;
+  }
+
+  getVideoIdentifier(video) {
+    return `${video.src || video.currentSrc}_${video.duration}_${video.offsetWidth}x${video.offsetHeight}`;
+  }
+
   async captureVideoThumbnail(video, delaySeconds = 0) {
     return new Promise((resolve) => {
       const capture = () => {
@@ -443,14 +648,12 @@ class SmartVideoDetector {
           const canvas = document.createElement('canvas');
           const aspectRatio = video.videoWidth / video.videoHeight;
 
-          // Standard thumbnail size
           canvas.width = 320;
           canvas.height = Math.round(320 / aspectRatio);
 
           const ctx = canvas.getContext('2d');
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-          // Quality check - ensure not completely black/white
           const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
           if (this.isValidThumbnail(imageData)) {
             resolve(canvas.toDataURL('image/jpeg', 0.8));
@@ -487,172 +690,180 @@ class SmartVideoDetector {
     if (nonTransparentPixels === 0) return false;
 
     const avgBrightness = totalBrightness / nonTransparentPixels;
-
-    // Reject completely black, white, or extremely uniform images
     return avgBrightness > 10 && avgBrightness < 245;
   }
 
   normalizeUrl(url) {
     try {
+      if (!url || typeof url !== 'string') {
+        console.warn('VIBRARY: Invalid URL provided for normalization:', url);
+        return '';
+      }
+
       const urlObj = new URL(url);
 
-      // Remove tracking and non-content query parameters
+      // Universal parameter cleanup
       const paramsToRemove = [
         'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
         'fbclid', 'gclid', 'ref', 'source', 'tracking', 'track',
-        'gallery', 'edit', 'share', 'social', 'from', 'via'
+        'gallery', 'edit', 'share', 'social', 'from', 'via', 'si'
       ];
 
       paramsToRemove.forEach(param => {
         urlObj.searchParams.delete(param);
       });
 
-      // Site-specific normalizations
-      if (urlObj.hostname.includes('youtube.com')) {
-        // Keep only essential YouTube params
-        const keepParams = ['v', 't', 'list', 'index'];
-        const newParams = new URLSearchParams();
-        keepParams.forEach(param => {
-          if (urlObj.searchParams.has(param)) {
-            newParams.set(param, urlObj.searchParams.get(param));
-          }
-        });
-        urlObj.search = newParams.toString();
-      } else if (urlObj.hostname.includes('dailymotion.com')) {
-        // Remove Dailymotion's UI-specific params
-        ['autoplay', 'mute', 'ui-start-screen-info'].forEach(param => {
-          urlObj.searchParams.delete(param);
-        });
-      }
-
       return urlObj.toString();
     } catch (e) {
-      return url;
+      console.warn('VIBRARY: URL normalization failed for:', url, e);
+      // Return original URL if normalization fails
+      return url || '';
     }
   }
 
   async processVideo(videoInfo) {
-    // Get the most specific URL possible
-    let currentUrl = window.location.href;
+    try {
+      let currentUrl = window.location.href;
 
-    // Universal validation: Don't capture if we're on a base domain or home page
-    const url = new URL(currentUrl);
-    const pathname = url.pathname;
+      // Universal URL validation
+      const url = new URL(currentUrl);
+      const pathname = url.pathname;
 
-    // Skip if we're on a home page or base domain (no meaningful path)
-    if (pathname === '/' || pathname === '/index.html' || pathname === '/home') {
-      console.log('VIBRARY: Skipping home page capture');
-      return;
-    }
-
-    // Skip if URL looks incomplete (no query params and very short path)
-    if (!url.search && pathname.length < 10 && !pathname.includes('/watch/') && !pathname.includes('/video/')) {
-      console.log('VIBRARY: Skipping - URL appears incomplete');
-      return;
-    }
-
-    currentUrl = this.normalizeUrl(currentUrl);
-    const cleanTitle = videoInfo.title;
-
-    // Enhanced deduplication key
-    const dedupeKey = this.generateDedupeKey(cleanTitle, currentUrl);
-
-    // Prevent rapid duplicates
-    if (this.detectedVideos.has(dedupeKey)) return;
-    this.detectedVideos.add(dedupeKey);
-
-    // Clean up old detections
-    if (this.detectedVideos.size > 15) {
-      const entries = Array.from(this.detectedVideos);
-      this.detectedVideos.clear();
-      entries.slice(-8).forEach(entry => this.detectedVideos.add(entry));
-    }
-
-    console.log('✅ VIBRARY: Processing video:', cleanTitle, `(${videoInfo.source})`);
-
-    // Simple, reliable thumbnail capture
-    let thumbnail = videoInfo.thumbnail || '';
-
-    if (videoInfo.video && !thumbnail) {
-      // Try existing poster first
-      thumbnail = videoInfo.video.poster || '';
-
-      // If no poster, capture immediately
-      if (!thumbnail) {
-        thumbnail = await this.captureVideoThumbnail(videoInfo.video, 0);
+      // Skip generic home pages
+      if (pathname === '/' || pathname === '/index.html' || pathname === '/home') {
+        console.log('VIBRARY: Skipping home page capture');
+        return;
       }
 
-      // Enhanced capture after delay for better quality
-      const duration = videoInfo.video.duration;
-      if (duration > 5) {
-        const delay = Math.min(8, duration * 0.15);
-
-        setTimeout(async () => {
-          const betterThumbnail = await this.captureVideoThumbnail(videoInfo.video, 0);
-          if (betterThumbnail && betterThumbnail !== thumbnail) {
-            this.updateVideoThumbnail(dedupeKey, betterThumbnail);
-          }
-        }, delay * 1000);
+      // Skip if URL appears to be a landing page
+      if (!url.search && pathname.length < 8) {
+        console.log('VIBRARY: Skipping - appears to be landing page');
+        return;
       }
+
+      currentUrl = this.normalizeUrl(currentUrl);
+      if (!currentUrl) {
+        console.warn('VIBRARY: Failed to normalize URL, skipping');
+        return;
+      }
+
+      const cleanTitle = videoInfo.title;
+      if (!cleanTitle) {
+        console.warn('VIBRARY: No valid title, skipping');
+        return;
+      }
+
+      const dedupeKey = this.generateDedupeKey(cleanTitle, currentUrl);
+
+      // Prevent rapid duplicates
+      if (this.detectedVideos.has(dedupeKey)) return;
+      this.detectedVideos.add(dedupeKey);
+
+      // Clean up old detections
+      if (this.detectedVideos.size > 20) {
+        const entries = Array.from(this.detectedVideos);
+        this.detectedVideos.clear();
+        entries.slice(-10).forEach(entry => this.detectedVideos.add(entry));
+      }
+
+      console.log('✅ VIBRARY: Processing video:', cleanTitle, `(${videoInfo.source})`);
+
+      // Smart thumbnail capture system
+      let thumbnail = videoInfo.thumbnail || '';
+
+      if (videoInfo.video && !thumbnail) {
+        thumbnail = videoInfo.video.poster || '';
+
+        if (!thumbnail) {
+          // Use smart thumbnail capture system
+          thumbnail = await this.captureSmartThumbnails(videoInfo.video);
+        }
+      }
+
+      const videoData = {
+        id: this.generateId(cleanTitle + currentUrl),
+        title: cleanTitle,
+        url: currentUrl,
+        thumbnail: thumbnail,
+        favicon: await this.getFavicon(),
+        website: this.getWebsiteName(currentUrl),
+        watchedAt: Date.now(),
+        rating: 0,
+        source: videoInfo.source,
+        dedupeKey: dedupeKey
+      };
+
+      await this.recordVideo(videoData);
+    } catch (error) {
+      console.error('VIBRARY: Error processing video:', error);
+
+      // Check if extension context is invalidated
+      if (error.message && error.message.includes('Extension context invalidated')) {
+        console.log('VIBRARY: Extension context invalidated - this is normal during development');
+        return;
+      }
+
+      // Don't throw error to prevent breaking the page
     }
-
-    const videoData = {
-      id: this.generateId(cleanTitle + currentUrl),
-      title: cleanTitle,
-      url: currentUrl,
-      thumbnail: thumbnail,
-      favicon: await this.getFavicon(),
-      website: this.getWebsiteName(currentUrl),
-      watchedAt: Date.now(),
-      rating: 0,
-      source: videoInfo.source,
-      dedupeKey: dedupeKey
-    };
-
-    await this.recordVideo(videoData);
   }
 
   generateDedupeKey(title, url) {
-    // Create a more sophisticated deduplication key
     const normalizedTitle = title.toLowerCase()
         .replace(/[^\w\s]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 
     const hostname = new URL(url).hostname.replace('www.', '');
-
-    // For YouTube Shorts, use a more specific key
-    if (hostname.includes('youtube.com') && url.includes('/shorts/')) {
-      const videoId = url.match(/\/shorts\/([^/?]+)/)?.[1];
-      return `yt_shorts_${videoId}_${normalizedTitle.substring(0, 50)}`;
-    }
-
     return `${hostname}_${normalizedTitle.substring(0, 60)}`;
-  }
-
-  calculateOptimalDelay(duration) {
-    if (!duration || duration < 30) return 8; // Short videos
-    if (duration < 300) return 15; // Medium videos (< 5 min)
-    if (duration < 1800) return 30; // Longer videos (< 30 min)
-    return Math.min(60, duration * 0.1); // Very long videos, max 60s delay
   }
 
   async updateVideoThumbnail(dedupeKey, newThumbnail) {
     try {
-      const result = await chrome.storage.local.get('videos');
-      const videos = result.videos || {};
+      // Check if chrome.storage is available (extension context check)
+      if (!chrome || !chrome.storage || !chrome.storage.local) {
+        console.warn('VIBRARY: Chrome storage not available for thumbnail update');
+        return;
+      }
 
-      const videoEntry = Object.entries(videos).find(([id, video]) =>
+      const result = await chrome.storage.local.get(['historyVideos', 'libraryVideos']);
+      const historyVideos = result.historyVideos || {};
+      const libraryVideos = result.libraryVideos || {};
+
+      // Check both storages for the video
+      const historyEntry = Object.entries(historyVideos).find(([id, video]) =>
+          video.dedupeKey === dedupeKey
+      );
+      const libraryEntry = Object.entries(libraryVideos).find(([id, video]) =>
           video.dedupeKey === dedupeKey
       );
 
-      if (videoEntry) {
-        const [videoId, videoData] = videoEntry;
-        videos[videoId] = { ...videoData, thumbnail: newThumbnail };
-        await chrome.storage.local.set({ videos });
+      let updated = false;
+
+      if (historyEntry) {
+        const [videoId, videoData] = historyEntry;
+        historyVideos[videoId] = { ...videoData, thumbnail: newThumbnail };
+        updated = true;
+      }
+
+      if (libraryEntry) {
+        const [videoId, videoData] = libraryEntry;
+        libraryVideos[videoId] = { ...videoData, thumbnail: newThumbnail };
+        updated = true;
+      }
+
+      if (updated) {
+        await chrome.storage.local.set({
+          historyVideos: historyVideos,
+          libraryVideos: libraryVideos
+        });
+        console.log('🖼️ VIBRARY: Updated thumbnail');
       }
     } catch (error) {
       console.error('VIBRARY: Failed to update thumbnail:', error);
+
+      if (error.message && error.message.includes('Extension context invalidated')) {
+        console.log('VIBRARY: Extension context invalidated during thumbnail update - this is normal during development');
+      }
     }
   }
 
@@ -688,33 +899,85 @@ class SmartVideoDetector {
     try {
       const hostname = new URL(url).hostname.replace('www.', '');
 
+      // Common sites with specific branding (only the most recognizable ones)
       const siteNames = {
+        // Video platforms
         'youtube.com': 'YouTube',
         'youtu.be': 'YouTube',
         'vimeo.com': 'Vimeo',
         'dailymotion.com': 'Dailymotion',
         'twitch.tv': 'Twitch',
+        'tiktok.com': 'TikTok',
+        'instagram.com': 'Instagram',
+        'twitter.com': 'Twitter',
+        'x.com': 'X',
+
+        // Streaming services
         'netflix.com': 'Netflix',
         'hulu.com': 'Hulu',
         'disneyplus.com': 'Disney+',
         'amazon.com': 'Prime Video',
         'primevideo.com': 'Prime Video',
+        'hbomax.com': 'HBO Max',
+        'crunchyroll.com': 'Crunchyroll',
+
+        // News/Media
+        'cnn.com': 'CNN',
+        'bbc.com': 'BBC',
+        'bbc.co.uk': 'BBC',
+
+        // Adult sites (common ones)
         'pornhub.com': 'Pornhub',
         'xvideos.com': 'XVideos',
         'xhamster.com': 'xHamster',
         'redtube.com': 'RedTube',
-        'hqporner.com': 'HQPorner'
+        'youporn.com': 'YouPorn',
+        'beeg.com': 'Beeg',
+        'tube8.com': 'Tube8'
       };
 
-      return siteNames[hostname] || this.capitalizeHostname(hostname);
+      // Return specific name if we have it
+      if (siteNames[hostname]) {
+        return siteNames[hostname];
+      }
+
+      // Auto-extract from domain (your brilliant idea!)
+      return this.extractSiteNameFromDomain(hostname);
     } catch (e) {
+      console.warn('VIBRARY: Error extracting website name from:', url);
       return 'Unknown';
     }
   }
 
-  capitalizeHostname(hostname) {
-    const name = hostname.split('.')[0];
-    return name.charAt(0).toUpperCase() + name.slice(1);
+  extractSiteNameFromDomain(hostname) {
+    try {
+      // Handle special cases first
+      if (hostname.includes('.')) {
+        const parts = hostname.split('.');
+
+        // For domains like 'co.uk', 'com.au', etc., use the second-to-last part
+        if (parts.length >= 3 && ['co', 'com', 'net', 'org'].includes(parts[parts.length - 2])) {
+          const mainPart = parts[parts.length - 3];
+          return mainPart.charAt(0).toUpperCase() + mainPart.slice(1);
+        }
+
+        // For regular domains, use the first part
+        const mainPart = parts[0];
+
+        // Handle very short domains
+        if (mainPart.length <= 2) {
+          return hostname.charAt(0).toUpperCase() + hostname.slice(1);
+        }
+
+        return mainPart.charAt(0).toUpperCase() + mainPart.slice(1);
+      }
+
+      // No dots in hostname (shouldn't happen but just in case)
+      return hostname.charAt(0).toUpperCase() + hostname.slice(1);
+    } catch (e) {
+      console.warn('VIBRARY: Error extracting site name from hostname:', hostname);
+      return 'Unknown';
+    }
   }
 
   generateId(input) {
@@ -725,63 +988,113 @@ class SmartVideoDetector {
 
   async recordVideo(videoData) {
     try {
-      const result = await chrome.storage.local.get('videos');
-      const videos = result.videos || {};
+      // Check if chrome.storage is available (extension context check)
+      if (!chrome || !chrome.storage || !chrome.storage.local) {
+        console.warn('VIBRARY: Chrome storage not available - extension context may be invalidated');
+        return;
+      }
 
-      // Check for existing by deduplication key first
-      const existingByDedupe = Object.entries(videos).find(([id, video]) =>
+      const result = await chrome.storage.local.get(['historyVideos', 'libraryVideos']);
+      const historyVideos = result.historyVideos || {};
+      const libraryVideos = result.libraryVideos || {};
+
+      // Check for existing by deduplication key in both storages
+      const existingInHistory = Object.entries(historyVideos).find(([id, video]) =>
+          video.dedupeKey === videoData.dedupeKey
+      );
+      const existingInLibrary = Object.entries(libraryVideos).find(([id, video]) =>
           video.dedupeKey === videoData.dedupeKey
       );
 
-      if (existingByDedupe) {
-        const [existingId, existingVideo] = existingByDedupe;
-        videos[existingId] = {
+      if (existingInHistory) {
+        const [existingId, existingVideo] = existingInHistory;
+        historyVideos[existingId] = {
           ...existingVideo,
           watchedAt: Date.now(),
           thumbnail: videoData.thumbnail || existingVideo.thumbnail,
           favicon: videoData.favicon || existingVideo.favicon,
-          url: videoData.url // Update URL to latest version
+          url: videoData.url
         };
-        console.log('📝 VIBRARY: Updated existing video via dedupe key');
+        console.log('📝 VIBRARY: Updated existing video in history via dedupe key');
+      } else if (existingInLibrary) {
+        const [existingId, existingVideo] = existingInLibrary;
+        libraryVideos[existingId] = {
+          ...existingVideo,
+          watchedAt: Date.now(),
+          thumbnail: videoData.thumbnail || existingVideo.thumbnail,
+          favicon: videoData.favicon || existingVideo.favicon,
+          url: videoData.url
+        };
+        console.log('📝 VIBRARY: Updated existing video in library via dedupe key');
       } else {
         // Check for legacy duplicates by title and URL
-        const existingByTitleUrl = Object.entries(videos).find(([id, video]) =>
+        const existingByTitleUrlHistory = Object.entries(historyVideos).find(([id, video]) =>
+            video.title === videoData.title &&
+            this.normalizeUrl(video.url) === this.normalizeUrl(videoData.url)
+        );
+        const existingByTitleUrlLibrary = Object.entries(libraryVideos).find(([id, video]) =>
             video.title === videoData.title &&
             this.normalizeUrl(video.url) === this.normalizeUrl(videoData.url)
         );
 
-        if (existingByTitleUrl) {
-          const [existingId, existingVideo] = existingByTitleUrl;
-          videos[existingId] = {
+        if (existingByTitleUrlHistory) {
+          const [existingId, existingVideo] = existingByTitleUrlHistory;
+          historyVideos[existingId] = {
             ...existingVideo,
             watchedAt: Date.now(),
             thumbnail: videoData.thumbnail || existingVideo.thumbnail,
             favicon: videoData.favicon || existingVideo.favicon,
-            dedupeKey: videoData.dedupeKey // Add dedupeKey to legacy entries
+            dedupeKey: videoData.dedupeKey
           };
-          console.log('📝 VIBRARY: Updated existing video via title/URL match');
+          console.log('📝 VIBRARY: Updated existing video in history via title/URL match');
+        } else if (existingByTitleUrlLibrary) {
+          const [existingId, existingVideo] = existingByTitleUrlLibrary;
+          libraryVideos[existingId] = {
+            ...existingVideo,
+            watchedAt: Date.now(),
+            thumbnail: videoData.thumbnail || existingVideo.thumbnail,
+            favicon: videoData.favicon || existingVideo.favicon,
+            dedupeKey: videoData.dedupeKey
+          };
+          console.log('📝 VIBRARY: Updated existing video in library via title/URL match');
         } else {
-          // Add new video
-          videos[videoData.id] = videoData;
-          console.log('✅ VIBRARY: Recorded new video:', videoData.title);
+          // Add new video to history
+          historyVideos[videoData.id] = videoData;
+          console.log('✅ VIBRARY: Recorded new video in history:', videoData.title);
         }
       }
 
-      await chrome.storage.local.set({ videos });
+      await chrome.storage.local.set({
+        historyVideos: historyVideos,
+        libraryVideos: libraryVideos
+      });
 
     } catch (error) {
       console.error('VIBRARY: Failed to record video:', error);
+
+      // Handle specific Chrome extension errors
+      if (error.message && error.message.includes('Extension context invalidated')) {
+        console.log('VIBRARY: Extension context invalidated - this is normal during development');
+      } else if (error.message && error.message.includes('storage')) {
+        console.log('VIBRARY: Storage error - extension may be disabled or reloading');
+      }
     }
   }
 
   destroy() {
     if (this.mediaCheckInterval) clearInterval(this.mediaCheckInterval);
     if (this.videoCheckInterval) clearInterval(this.videoCheckInterval);
-    if (this.iframeWatcher) this.iframeWatcher.disconnect();
+    if (this.debounceTimeout) clearTimeout(this.debounceTimeout);
+
+    // Clean up thumbnail capture timeouts
+    this.thumbnailCaptureQueue.forEach(timeouts => {
+      timeouts.forEach(timeout => clearTimeout(timeout));
+    });
+    this.thumbnailCaptureQueue.clear();
   }
 }
 
-// Initialize with enhanced detection
+// Initialize smart detector
 const vibraryDetector = new SmartVideoDetector();
 
 // Cleanup

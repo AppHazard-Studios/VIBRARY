@@ -48,17 +48,18 @@ class VibraryBackground {
   async performFreshInstall() {
     console.log('VIBRARY: Performing fresh installation setup');
 
-    // Initialize storage with default values
+    // Initialize storage with default values using new architecture
     const defaultData = {
-      videos: {},
+      historyVideos: {},
+      libraryVideos: {},
       playlists: {},
       blacklistEnabled: true,
       blacklistedDomains: [],
+      autoCleanupInterval: 'off',
       installDate: Date.now(),
       version: this.version,
       settings: {
         autoCleanup: true,
-        maxStorageEntries: 5000,
         cleanupIntervalDays: 30
       }
     };

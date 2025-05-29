@@ -174,39 +174,64 @@ body {
 .controls {
   display: flex;
   gap: 8px;
-  margin-bottom: 20px;
+  margin-bottom: 16px;
   align-items: center;
-  flex-wrap: nowrap;
-  overflow: hidden; /* Prevent horizontal scroll */
+}
+
+.search-input {
+  flex: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  transition: var(--transition);
+  min-width: 100px;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+.search-input:hover {
+  border-color: var(--border-light);
+  background-color: var(--bg-elevated);
+}
+
+.search-input::placeholder {
+  color: var(--text-muted);
 }
 
 .controls select {
   background: var(--bg-card);
   border: 1px solid var(--border);
   color: var(--text-primary);
-  padding: 10px 14px;
+  padding: 10px 28px 10px 12px;
   border-radius: var(--radius);
   font-size: 13px;
   cursor: pointer;
   transition: var(--transition);
   appearance: none;
   background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3e%3c/svg%3e");
-  background-position: right 10px center;
+  background-position: right 8px center;
   background-repeat: no-repeat;
-  background-size: 16px;
-  padding-right: 36px;
-  min-width: 0;
-  flex-shrink: 1;
+  background-size: 14px;
+  flex-shrink: 0;
+  min-width: 70px;
 }
 
-.controls select:first-child {
-  flex: 1;
-  min-width: 120px;
+.controls select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-light);
 }
 
-.controls select:nth-child(2) {
-  flex: 0 0 auto;
-  min-width: 110px;
+.controls select:hover {
+  border-color: var(--border-light);
+  background-color: var(--bg-elevated);
 }
 
 .controls select:focus {
@@ -321,13 +346,16 @@ body {
   background: var(--bg-elevated);
   color: var(--text-secondary);
   border: 1px solid var(--border);
-  padding: 6px 12px;
+  padding: 8px 12px;
   border-radius: var(--radius-small);
   font-size: 12px;
   cursor: pointer;
   transition: var(--transition);
   font-weight: 500;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .btn-small:hover {
@@ -614,7 +642,7 @@ body {
   gap: 4px;
 }
 
-/* Playlists */
+/* Library & Playlists */
 .playlist-list {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
@@ -703,9 +731,8 @@ body {
 }
 
 /* Empty State */
-/* Empty State */
 .empty-state {
-  text-align:  center;
+  text-align: center;
   color: var(--text-muted);
   padding: 60px 24px;
   display: flex;
@@ -888,6 +915,49 @@ body {
 .playlist-option.selected {
   background: var(--accent);
   color: white;
+}
+
+/* Auto-Cleanup Settings */
+.cleanup-setting {
+  margin: 20px 0;
+  text-align: left;
+}
+
+.cleanup-setting label {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+
+.cleanup-select {
+  width: 100%;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: var(--transition);
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3e%3c/svg%3e");
+  background-position: right 12px center;
+  background-repeat: no-repeat;
+  background-size: 16px;
+  padding-right: 40px;
+}
+
+.cleanup-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+.cleanup-select:hover {
+  border-color: var(--border-light);
+  background-color: var(--bg-elevated);
 }
 
 /* Blacklist Toggle */

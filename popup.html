@@ -11,7 +11,7 @@
   <h1>VIBRARY</h1>
   <div class="tabs">
     <button class="tab active" data-tab="history">History</button>
-    <button class="tab" data-tab="playlists">Playlists</button>
+    <button class="tab" data-tab="library">Library</button>
   </div>
 </div>
 
@@ -19,26 +19,27 @@
   <!-- History Tab -->
   <div id="history" class="tab-content active">
     <div class="controls">
-      <select id="rating-filter">
-        <option value="all">All Videos</option>
-        <option value="5">★★★★★ (5 stars)</option>
-        <option value="4">★★★★ (4 stars)</option>
-        <option value="3">★★★ (3 stars)</option>
-        <option value="2">★★ (2 stars)</option>
-        <option value="1">★ (1 star)</option>
+      <input type="text" id="search-input" placeholder="Search..." class="search-input">
+      <select id="rating-filter" title="Filter by rating">
+        <option value="all">All</option>
+        <option value="5">★★★★★</option>
+        <option value="4">★★★★</option>
+        <option value="3">★★★</option>
+        <option value="2">★★</option>
+        <option value="1">★</option>
         <option value="0">Unrated</option>
       </select>
-      <select id="sort-by">
-        <option value="date">Recent First</option>
-        <option value="rating">By Rating</option>
+      <select id="sort-by" title="Sort videos">
+        <option value="date">Recent</option>
+        <option value="rating">Rating</option>
       </select>
-      <button id="clear-history" class="btn-danger btn-small">Clear All</button>
+      <button id="clear-history" class="btn-danger btn-small" title="Delete all history">Delete</button>
     </div>
     <div id="history-list" class="video-list"></div>
   </div>
 
-  <!-- Playlists Tab -->
-  <div id="playlists" class="tab-content">
+  <!-- Library Tab -->
+  <div id="library" class="tab-content">
     <div class="playlist-header">
       <button id="new-playlist" class="btn-primary">+ New Playlist</button>
       <div class="settings-container">
@@ -46,6 +47,7 @@
         <div id="settings-menu" class="settings-menu">
           <div class="settings-menu-item" data-action="export">📤 Export Data</div>
           <div class="settings-menu-item" data-action="import">📥 Import Data</div>
+          <div class="settings-menu-item" data-action="auto-cleanup">🧹 Auto-Cleanup</div>
           <div class="settings-menu-item" data-action="blacklist">🚫 Manage Blacklist</div>
         </div>
       </div>
@@ -56,7 +58,7 @@
   <!-- Individual Playlist View -->
   <div id="playlist-view" class="tab-content">
     <div class="playlist-header">
-      <button id="back-btn" class="btn-back">← Back to Playlists</button>
+      <button id="back-btn" class="btn-back">← Back to Library</button>
       <h2 id="playlist-name" class="editable-title" title="Click to rename"></h2>
       <button id="delete-playlist-btn" class="btn-danger">Delete</button>
     </div>
@@ -106,6 +108,29 @@
     <div class="modal-actions">
       <button id="import-confirm-btn" class="btn-primary">Import Data</button>
       <button id="import-cancel-btn" class="btn-secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Auto-Cleanup Modal -->
+<div id="auto-cleanup-modal" class="modal">
+  <div class="modal-content">
+    <h3>Auto-Cleanup Settings</h3>
+    <p>Automatically clear history videos (playlists are never affected):</p>
+    <div class="cleanup-setting">
+      <label for="cleanup-interval">Clear history every:</label>
+      <select id="cleanup-interval" class="cleanup-select">
+        <option value="off">Never (Off)</option>
+        <option value="1">Daily</option>
+        <option value="7">Weekly</option>
+        <option value="30">Monthly</option>
+        <option value="90">Every 3 Months</option>
+        <option value="365">Yearly</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button id="cleanup-save-btn" class="btn-primary">Save Settings</button>
+      <button id="cleanup-cancel-btn" class="btn-secondary">Cancel</button>
     </div>
   </div>
 </div>

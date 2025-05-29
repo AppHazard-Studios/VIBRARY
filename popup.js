@@ -1,53 +1,141 @@
 class Vibrary {
   constructor() {
-    this.videos = {};
+    this.historyVideos = {}; // Videos only in history (can be deleted)
+    this.libraryVideos = {}; // Videos in playlists (persistent)
     this.playlists = {};
     this.settings = {
       blacklistEnabled: true,
-      blacklistedDomains: []
+      blacklistedDomains: [],
+      autoCleanupInterval: 'off' // off, 1, 7, 30, 90, 365 (days)
     };
     this.currentTab = 'history';
     this.currentPlaylist = null;
     this.currentVideo = null;
     this.selectedRating = 0;
     this.selectedPlaylistName = null;
+    this.searchQuery = '';
 
     this.init();
   }
 
   async init() {
-    await this.loadData();
-    await this.loadSettings();
-    this.bindEvents();
-    this.setupAutoRefresh();
-    this.render();
+    console.log('VIBRARY: Initializing popup...');
+
+    try {
+      await this.loadData();
+      await this.loadSettings();
+      this.bindEvents();
+      this.setupAutoRefresh();
+
+      // Ensure search starts hidden if it exists
+      const searchBar = document.getElementById('search-bar');
+      if (searchBar) {
+        searchBar.classList.add('hidden');
+      }
+
+      this.render();
+      console.log('VIBRARY: Popup initialized successfully');
+    } catch (error) {
+      console.error('VIBRARY: Failed to initialize popup:', error);
+      // Try to render anyway
+      this.render();
+    }
   }
 
   async loadData() {
     try {
-      const result = await chrome.storage.local.get(['videos', 'playlists']);
-      this.videos = result.videos || {};
-      this.playlists = result.playlists || {};
+      console.log('VIBRARY: Loading data...');
+      const result = await chrome.storage.local.get(['historyVideos', 'libraryVideos', 'playlists', 'videos']);
 
-      // Clean up duplicates on load
+      // Migration from old single-storage system
+      if (result.videos && !result.historyVideos && !result.libraryVideos) {
+        console.log('VIBRARY: Migrating to new storage architecture');
+        await this.migrateToNewArchitecture(result.videos, result.playlists || {});
+      } else {
+        this.historyVideos = result.historyVideos || {};
+        this.libraryVideos = result.libraryVideos || {};
+        this.playlists = result.playlists || {};
+      }
+
+      // Clean up duplicates
       await this.cleanupDuplicates();
 
-      console.log('VIBRARY: Loaded', Object.keys(this.videos).length, 'videos');
+      const totalVideos = Object.keys(this.historyVideos).length + Object.keys(this.libraryVideos).length;
+      console.log(`VIBRARY: Loaded ${totalVideos} videos (${Object.keys(this.historyVideos).length} history, ${Object.keys(this.libraryVideos).length} library)`);
     } catch (error) {
-      console.error('Error loading data:', error);
-      this.videos = {};
+      console.error('VIBRARY: Error loading data:', error);
+      // Fallback to empty state
+      this.historyVideos = {};
+      this.libraryVideos = {};
       this.playlists = {};
     }
   }
 
+  async migrateToNewArchitecture(oldVideos, oldPlaylists) {
+    console.log('VIBRARY: Starting migration...', {
+      videosCount: Object.keys(oldVideos).length,
+      playlistsCount: Object.keys(oldPlaylists).length
+    });
+
+    try {
+      // Get all video IDs that are in playlists
+      const playlistVideoIds = new Set();
+      Object.values(oldPlaylists).forEach(videoIds => {
+        if (Array.isArray(videoIds)) {
+          videoIds.forEach(id => playlistVideoIds.add(id));
+        }
+      });
+
+      console.log('VIBRARY: Videos in playlists:', playlistVideoIds.size);
+
+      // Separate videos based on whether they're in playlists
+      this.historyVideos = {};
+      this.libraryVideos = {};
+
+      Object.entries(oldVideos).forEach(([videoId, video]) => {
+        // Skip videos that were marked as deleted in old system
+        if (video.deletedFromHistory) {
+          console.log('VIBRARY: Skipping deleted video:', videoId);
+          return;
+        }
+
+        if (playlistVideoIds.has(videoId)) {
+          // Video is in playlists - goes to library
+          this.libraryVideos[videoId] = video;
+        } else {
+          // Video is only in history
+          this.historyVideos[videoId] = video;
+        }
+      });
+
+      this.playlists = oldPlaylists;
+
+      // Save new architecture and remove old data
+      await this.saveData();
+      await chrome.storage.local.remove(['videos']);
+
+      console.log(`VIBRARY: Migration complete - ${Object.keys(this.historyVideos).length} history, ${Object.keys(this.libraryVideos).length} library`);
+    } catch (error) {
+      console.error('VIBRARY: Migration failed:', error);
+      // Fallback - put everything in history
+      this.historyVideos = oldVideos || {};
+      this.libraryVideos = {};
+      this.playlists = oldPlaylists || {};
+    }
+  }
+
   async cleanupDuplicates() {
-    const videos = this.videos;
+    // Clean duplicates within each storage area
+    await this.cleanupDuplicatesInStorage(this.historyVideos, 'history');
+    await this.cleanupDuplicatesInStorage(this.libraryVideos, 'library');
+  }
+
+  async cleanupDuplicatesInStorage(videos, storageName) {
     const seenDedupeKeys = new Set();
     const seenTitleUrl = new Set();
     const toRemove = [];
 
     for (const [videoId, video] of Object.entries(videos)) {
-      // Check dedupe key first (newer method)
       if (video.dedupeKey) {
         if (seenDedupeKeys.has(video.dedupeKey)) {
           toRemove.push(videoId);
@@ -55,7 +143,6 @@ class Vibrary {
         }
         seenDedupeKeys.add(video.dedupeKey);
       } else {
-        // Fallback to title+url for legacy entries
         const titleUrlKey = `${video.title}::${this.normalizeUrl(video.url || '')}`;
         if (seenTitleUrl.has(titleUrlKey)) {
           toRemove.push(videoId);
@@ -66,14 +153,16 @@ class Vibrary {
     }
 
     if (toRemove.length > 0) {
-      console.log(`VIBRARY: Removing ${toRemove.length} duplicate videos`);
+      console.log(`VIBRARY: Removing ${toRemove.length} duplicate videos from ${storageName}`);
       for (const videoId of toRemove) {
-        delete this.videos[videoId];
+        delete videos[videoId];
 
-        // Remove from playlists too
-        Object.keys(this.playlists).forEach(playlistName => {
-          this.playlists[playlistName] = this.playlists[playlistName].filter(id => id !== videoId);
-        });
+        // Also remove from playlists if library cleanup
+        if (storageName === 'library') {
+          Object.keys(this.playlists).forEach(playlistName => {
+            this.playlists[playlistName] = this.playlists[playlistName].filter(id => id !== videoId);
+          });
+        }
       }
       await this.saveData();
     }
@@ -83,7 +172,6 @@ class Vibrary {
     try {
       const urlObj = new URL(url);
 
-      // Remove tracking parameters
       const paramsToRemove = [
         'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
         'fbclid', 'gclid', 'ref', 'source', 'tracking', 'track',
@@ -102,9 +190,10 @@ class Vibrary {
 
   async loadSettings() {
     try {
-      const result = await chrome.storage.local.get(['blacklistEnabled', 'blacklistedDomains']);
+      const result = await chrome.storage.local.get(['blacklistEnabled', 'blacklistedDomains', 'autoCleanupInterval']);
       this.settings.blacklistEnabled = result.blacklistEnabled !== false;
       this.settings.blacklistedDomains = result.blacklistedDomains || [];
+      this.settings.autoCleanupInterval = result.autoCleanupInterval || 'off';
     } catch (error) {
       console.error('Error loading settings:', error);
     }
@@ -113,7 +202,8 @@ class Vibrary {
   async saveData() {
     try {
       await chrome.storage.local.set({
-        videos: this.videos,
+        historyVideos: this.historyVideos,
+        libraryVideos: this.libraryVideos,
         playlists: this.playlists
       });
     } catch (error) {
@@ -125,11 +215,22 @@ class Vibrary {
     try {
       await chrome.storage.local.set({
         blacklistEnabled: this.settings.blacklistEnabled,
-        blacklistedDomains: this.settings.blacklistedDomains
+        blacklistedDomains: this.settings.blacklistedDomains,
+        autoCleanupInterval: this.settings.autoCleanupInterval
       });
     } catch (error) {
       console.error('Error saving settings:', error);
     }
+  }
+
+  // Get video from either storage
+  getVideo(videoId) {
+    return this.historyVideos[videoId] || this.libraryVideos[videoId];
+  }
+
+  // Get all videos (combined)
+  getAllVideos() {
+    return { ...this.historyVideos, ...this.libraryVideos };
   }
 
   isBlacklisted(video) {
@@ -147,8 +248,9 @@ class Vibrary {
 
   setupAutoRefresh() {
     chrome.storage.onChanged.addListener((changes, area) => {
-      if (area === 'local' && changes.videos) {
-        this.videos = changes.videos.newValue || {};
+      if (area === 'local' && (changes.historyVideos || changes.libraryVideos)) {
+        this.historyVideos = changes.historyVideos?.newValue || {};
+        this.libraryVideos = changes.libraryVideos?.newValue || {};
         if (this.currentTab === 'history') {
           this.renderHistory();
         }
@@ -157,6 +259,58 @@ class Vibrary {
   }
 
   bindEvents() {
+    // Search functionality
+    toggleSearch() {
+      const searchBar = document.getElementById('search-bar');
+      const searchInput = document.getElementById('search-input');
+      const searchToggle = document.getElementById('search-toggle');
+
+      if (!searchBar || !searchInput) {
+        console.log('VIBRARY: Search elements not found');
+        return;
+      }
+
+      this.searchExpanded = true;
+      searchBar.classList.remove('hidden');
+
+      if (searchToggle) {
+        searchToggle.style.background = 'var(--accent)';
+        searchToggle.style.color = 'white';
+      }
+
+      // Focus the input after animation
+      setTimeout(() => {
+        searchInput.focus();
+      }, 200);
+    }
+
+    closeSearch() {
+      const searchBar = document.getElementById('search-bar');
+      const searchInput = document.getElementById('search-input');
+      const searchToggle = document.getElementById('search-toggle');
+
+      if (!searchBar || !searchInput) {
+        return;
+      }
+
+      // Clear search and hide bar
+      this.searchQuery = '';
+      this.searchExpanded = false;
+      searchInput.value = '';
+      searchBar.classList.add('hidden');
+
+      // Reset button style
+      if (searchToggle) {
+        searchToggle.style.background = '';
+        searchToggle.style.color = '';
+      }
+
+      // Re-render without search filter
+      if (this.currentTab === 'history') {
+        this.renderHistory();
+      }
+    }
+
     // Tab switching
     document.querySelectorAll('.tab').forEach(tab => {
       tab.addEventListener('click', (e) => {
@@ -168,11 +322,22 @@ class Vibrary {
     // Controls
     document.getElementById('rating-filter').addEventListener('change', () => this.renderHistory());
     document.getElementById('sort-by').addEventListener('change', () => this.renderHistory());
+    document.getElementById('search-toggle').addEventListener('click', () => this.toggleSearch());
+    document.getElementById('search-close').addEventListener('click', () => this.closeSearch());
+    document.getElementById('search-input').addEventListener('input', (e) => {
+      this.searchQuery = e.target.value;
+      this.renderHistory();
+    });
+    document.getElementById('search-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        this.closeSearch();
+      }
+    });
     document.getElementById('clear-history').addEventListener('click', () => this.clearHistory());
 
-    // Playlists
+    // Library/Playlists
     document.getElementById('new-playlist').addEventListener('click', () => this.createPlaylist());
-    document.getElementById('back-btn').addEventListener('click', () => this.showPlaylists());
+    document.getElementById('back-btn').addEventListener('click', () => this.showLibrary());
     document.getElementById('delete-playlist-btn').addEventListener('click', () => this.deleteCurrentPlaylist());
     document.getElementById('playlist-name').addEventListener('click', () => this.renameCurrentPlaylist());
 
@@ -208,6 +373,10 @@ class Vibrary {
     // Import modal
     document.getElementById('import-confirm-btn').addEventListener('click', () => this.importData());
     document.getElementById('import-cancel-btn').addEventListener('click', () => this.closeModal('import-modal'));
+
+    // Auto-cleanup modal
+    document.getElementById('cleanup-save-btn').addEventListener('click', () => this.saveAutoCleanup());
+    document.getElementById('cleanup-cancel-btn').addEventListener('click', () => this.closeModal('auto-cleanup-modal'));
 
     // Blacklist modal
     document.getElementById('blacklist-save-btn').addEventListener('click', () => this.saveBlacklist());
@@ -254,6 +423,9 @@ class Vibrary {
       case 'import':
         this.showImportModal();
         break;
+      case 'auto-cleanup':
+        this.showAutoCleanupModal();
+        break;
       case 'blacklist':
         this.showBlacklistModal();
         break;
@@ -262,65 +434,148 @@ class Vibrary {
 
   // Tab switching
   switchTab(tab) {
-    this.currentTab = tab;
-    this.currentPlaylist = null;
+    console.log(`VIBRARY: Switching to ${tab} tab`);
 
-    // Update tab buttons
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+    try {
+      this.currentTab = tab;
+      this.currentPlaylist = null;
 
-    // Show correct content
-    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+      // Clear search when switching tabs
+      this.searchQuery = '';
+      const searchInput = document.getElementById('search-input');
+      if (searchInput) {
+        searchInput.value = '';
+      }
 
-    if (tab === 'history') {
-      document.getElementById('history').classList.add('active');
-    } else if (tab === 'playlists') {
-      document.getElementById('playlists').classList.add('active');
-      document.getElementById('playlist-view').classList.remove('active');
+      // Update tab buttons
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      const activeTab = document.querySelector(`[data-tab="${tab}"]`);
+      if (activeTab) {
+        activeTab.classList.add('active');
+      }
+
+      // Show correct content
+      document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+
+      if (tab === 'history') {
+        const historyTab = document.getElementById('history');
+        if (historyTab) {
+          historyTab.classList.add('active');
+        }
+      } else if (tab === 'library') {
+        const libraryTab = document.getElementById('library');
+        const playlistView = document.getElementById('playlist-view');
+
+        if (libraryTab) {
+          libraryTab.classList.add('active');
+        }
+        if (playlistView) {
+          playlistView.classList.remove('active');
+        }
+      }
+
+      this.render();
+    } catch (error) {
+      console.error('VIBRARY: Error switching tabs:', error);
     }
-
-    this.render();
   }
 
   render() {
-    if (this.currentTab === 'history') {
-      this.renderHistory();
-    } else if (this.currentTab === 'playlists') {
-      if (this.currentPlaylist) {
-        this.renderPlaylistView();
-      } else {
-        this.renderPlaylistsList();
+    console.log(`VIBRARY: Rendering ${this.currentTab} tab`);
+
+    try {
+      if (this.currentTab === 'history') {
+        this.renderHistory();
+      } else if (this.currentTab === 'library') {
+        if (this.currentPlaylist) {
+          this.renderPlaylistView();
+        } else {
+          this.renderPlaylistsList();
+        }
       }
+    } catch (error) {
+      console.error('VIBRARY: Error in render:', error);
     }
   }
 
   renderHistory() {
-    const container = document.getElementById('history-list');
-    const ratingFilter = document.getElementById('rating-filter').value;
-    const sortBy = document.getElementById('sort-by').value;
+    console.log('VIBRARY: Rendering history...');
 
-    let videos = Object.entries(this.videos).map(([id, video]) => ({ id, ...video }));
+    const container = document.getElementById('history-list');
+    if (!container) {
+      console.error('VIBRARY: History container not found');
+      return;
+    }
+
+    const ratingFilter = document.getElementById('rating-filter');
+    const sortBy = document.getElementById('sort-by');
+
+    const ratingFilterValue = ratingFilter ? ratingFilter.value : 'all';
+    const sortByValue = sortBy ? sortBy.value : 'date';
+
+    // Get only history videos
+    let videos = Object.entries(this.historyVideos).map(([id, video]) => ({ id, ...video }));
+    console.log(`VIBRARY: Found ${videos.length} history videos`);
 
     // Filter blacklisted videos
     if (this.settings.blacklistEnabled) {
       videos = videos.filter(video => !this.isBlacklisted(video));
+      console.log(`VIBRARY: After blacklist filter: ${videos.length} videos`);
+    }
+
+    // Search filter
+    if (this.searchQuery.trim()) {
+      videos = this.filterVideosBySearch(videos, this.searchQuery.trim());
+      console.log(`VIBRARY: After search filter "${this.searchQuery}": ${videos.length} videos`);
     }
 
     // Filter by rating
-    if (ratingFilter !== 'all') {
-      const rating = parseInt(ratingFilter);
+    if (ratingFilterValue !== 'all') {
+      const rating = parseInt(ratingFilterValue);
       videos = videos.filter(v => v.rating === rating);
+      console.log(`VIBRARY: After rating filter ${rating}: ${videos.length} videos`);
     }
 
     // Sort
     videos.sort((a, b) => {
-      if (sortBy === 'rating') {
+      if (sortByValue === 'rating') {
         return (b.rating || 0) - (a.rating || 0) || b.watchedAt - a.watchedAt;
       }
       return b.watchedAt - a.watchedAt;
     });
 
+    console.log(`VIBRARY: Final video count for rendering: ${videos.length}`);
     this.renderVideoList(container, videos, { showDelete: true });
+  }
+
+  filterVideosBySearch(videos, query) {
+    const lowerQuery = query.toLowerCase();
+
+    return videos.filter(video => {
+      // Search in title
+      if (video.title && video.title.toLowerCase().includes(lowerQuery)) {
+        return true;
+      }
+
+      // Search in website/source
+      if (video.website && video.website.toLowerCase().includes(lowerQuery)) {
+        return true;
+      }
+
+      // Search in URL hostname
+      if (video.url) {
+        try {
+          const hostname = new URL(video.url).hostname.replace('www.', '');
+          if (hostname.toLowerCase().includes(lowerQuery)) {
+            return true;
+          }
+        } catch (e) {
+          // Invalid URL, skip
+        }
+      }
+
+      return false;
+    });
   }
 
   renderPlaylistsList() {
@@ -331,7 +586,7 @@ class Vibrary {
       container.innerHTML = `
         <div class="empty-state">
           <h3>No Playlists Yet</h3>
-          <p>Create your first playlist to organize your videos</p>
+          <p>Create your first playlist to organize your videos in your library</p>
         </div>
       `;
       return;
@@ -341,7 +596,7 @@ class Vibrary {
       // Get first valid, non-blacklisted video for thumbnail
       let thumbnail = '📁';
       const firstValidVideo = videoIds
-          .map(id => this.videos[id])
+          .map(id => this.libraryVideos[id])
           .find(video => video && !this.isBlacklisted(video));
 
       if (firstValidVideo?.thumbnail) {
@@ -372,18 +627,18 @@ class Vibrary {
     this.currentPlaylist = playlistName;
 
     // Switch to playlist view
-    document.getElementById('playlists').classList.remove('active');
+    document.getElementById('library').classList.remove('active');
     document.getElementById('playlist-view').classList.add('active');
 
     this.renderPlaylistView();
   }
 
-  showPlaylists() {
+  showLibrary() {
     this.currentPlaylist = null;
 
-    // Switch back to playlists list
+    // Switch back to library list
     document.getElementById('playlist-view').classList.remove('active');
-    document.getElementById('playlists').classList.add('active');
+    document.getElementById('library').classList.add('active');
 
     this.renderPlaylistsList();
   }
@@ -397,9 +652,9 @@ class Vibrary {
     // Update header
     document.getElementById('playlist-name').textContent = playlistName;
 
-    // Get valid, non-blacklisted videos
+    // Get valid, non-blacklisted videos from library storage
     const videos = videoIds
-        .map(id => this.videos[id] ? { id, ...this.videos[id] } : null)
+        .map(id => this.libraryVideos[id] ? { id, ...this.libraryVideos[id] } : null)
         .filter(video => video && !this.isBlacklisted(video));
 
     const container = document.getElementById('playlist-videos');
@@ -408,8 +663,12 @@ class Vibrary {
 
   renderVideoList(container, videos, options = {}) {
     if (videos.length === 0) {
-      const message = this.settings.blacklistEnabled && this.settings.blacklistedDomains.length > 0 ?
-          'No videos found (some may be blacklisted)' : 'No videos found';
+      let message = 'No videos found';
+      if (this.searchQuery.trim()) {
+        message = `No videos found for "${this.searchQuery}"`;
+      } else if (this.settings.blacklistEnabled && this.settings.blacklistedDomains.length > 0) {
+        message = 'No videos found (some may be blacklisted)';
+      }
 
       container.innerHTML = `
         <div class="empty-state">
@@ -526,7 +785,7 @@ class Vibrary {
 
   // Rating functionality
   showRatingModal(videoId) {
-    this.currentVideo = this.videos[videoId];
+    this.currentVideo = this.getVideo(videoId);
     if (!this.currentVideo) return;
 
     document.getElementById('rating-video-title').textContent = this.currentVideo.title;
@@ -538,12 +797,15 @@ class Vibrary {
   async saveRating() {
     if (!this.currentVideo) return;
 
-    const videoId = Object.keys(this.videos).find(id => this.videos[id] === this.currentVideo);
-    if (videoId) {
-      this.videos[videoId].rating = this.selectedRating;
-      await this.saveData();
+    // Find video in either storage and update
+    if (this.historyVideos[this.currentVideo.id]) {
+      this.historyVideos[this.currentVideo.id].rating = this.selectedRating;
+    }
+    if (this.libraryVideos[this.currentVideo.id]) {
+      this.libraryVideos[this.currentVideo.id].rating = this.selectedRating;
     }
 
+    await this.saveData();
     this.closeModal('rating-modal');
     this.render();
   }
@@ -560,7 +822,7 @@ class Vibrary {
 
   // Playlist functionality
   showPlaylistModal(videoId) {
-    this.currentVideo = this.videos[videoId];
+    this.currentVideo = this.getVideo(videoId);
     if (!this.currentVideo) return;
 
     document.getElementById('playlist-video-title').textContent = this.currentVideo.title;
@@ -603,8 +865,16 @@ class Vibrary {
   async addToPlaylist() {
     if (!this.selectedPlaylistName || !this.currentVideo) return;
 
-    const videoId = Object.keys(this.videos).find(id => this.videos[id] === this.currentVideo);
-    if (videoId && !this.playlists[this.selectedPlaylistName].includes(videoId)) {
+    const videoId = this.currentVideo.id;
+
+    // Move video from history to library if needed
+    if (this.historyVideos[videoId] && !this.libraryVideos[videoId]) {
+      this.libraryVideos[videoId] = this.historyVideos[videoId];
+      delete this.historyVideos[videoId];
+    }
+
+    // Add to playlist if not already there
+    if (!this.playlists[this.selectedPlaylistName].includes(videoId)) {
       this.playlists[this.selectedPlaylistName].push(videoId);
       await this.saveData();
       this.showNotification(`Added to "${this.selectedPlaylistName}"`);
@@ -669,7 +939,7 @@ class Vibrary {
 
     delete this.playlists[this.currentPlaylist];
     await this.saveData();
-    this.showPlaylists();
+    this.showLibrary();
     this.showNotification('Playlist deleted');
   }
 
@@ -677,20 +947,37 @@ class Vibrary {
     if (!this.currentPlaylist) return;
 
     this.playlists[this.currentPlaylist] = this.playlists[this.currentPlaylist].filter(id => id !== videoId);
+
+    // If video is not in any other playlists, move it back to history
+    const inOtherPlaylists = Object.values(this.playlists).some(playlist => playlist.includes(videoId));
+    if (!inOtherPlaylists && this.libraryVideos[videoId]) {
+      this.historyVideos[videoId] = this.libraryVideos[videoId];
+      delete this.libraryVideos[videoId];
+    }
+
     await this.saveData();
     this.renderPlaylistView();
     this.showNotification('Removed from playlist');
   }
 
   async deleteVideo(videoId) {
-    if (!confirm('Delete this video from history?')) return;
+    if (!confirm('Delete this video permanently?')) return;
 
-    delete this.videos[videoId];
+    // Check if video is in any playlists
+    const inPlaylists = Object.values(this.playlists).some(playlist => playlist.includes(videoId));
 
-    // Remove from all playlists
-    Object.keys(this.playlists).forEach(playlistName => {
-      this.playlists[playlistName] = this.playlists[playlistName].filter(id => id !== videoId);
-    });
+    if (inPlaylists) {
+      if (!confirm('This video is in playlists. Delete from everywhere?')) return;
+
+      // Remove from all playlists
+      Object.keys(this.playlists).forEach(playlistName => {
+        this.playlists[playlistName] = this.playlists[playlistName].filter(id => id !== videoId);
+      });
+      delete this.libraryVideos[videoId];
+    }
+
+    // Remove from history
+    delete this.historyVideos[videoId];
 
     await this.saveData();
     this.render();
@@ -698,23 +985,36 @@ class Vibrary {
   }
 
   async clearHistory() {
-    if (!confirm('Delete all video history? This cannot be undone.')) return;
+    if (!confirm('Delete all history? Videos in playlists will be preserved.')) return;
 
-    this.videos = {};
-    this.playlists = {};
+    // Only clear videos that are NOT in any playlists
+    const playlistVideoIds = new Set();
+    Object.values(this.playlists).forEach(videoIds => {
+      videoIds.forEach(id => playlistVideoIds.add(id));
+    });
+
+    let deletedCount = 0;
+    Object.keys(this.historyVideos).forEach(videoId => {
+      if (!playlistVideoIds.has(videoId)) {
+        delete this.historyVideos[videoId];
+        deletedCount++;
+      }
+    });
+
     await this.saveData();
     this.render();
-    this.showNotification('History cleared');
+    this.showNotification(`Deleted ${deletedCount} videos from history`);
   }
 
   // Import/Export functionality
   async exportData() {
     const exportData = {
-      videos: this.videos,
+      historyVideos: this.historyVideos,
+      libraryVideos: this.libraryVideos,
       playlists: this.playlists,
       settings: this.settings,
       exportDate: new Date().toISOString(),
-      version: '2.4'
+      version: '2.5'
     };
 
     const dataStr = JSON.stringify(exportData, null, 2);
@@ -726,14 +1026,15 @@ class Vibrary {
     a.click();
     URL.revokeObjectURL(url);
 
+    const totalVideos = Object.keys(this.historyVideos).length + Object.keys(this.libraryVideos).length;
     const size = (new Blob([dataStr]).size / 1024).toFixed(1);
-    this.showNotification(`Exported ${Object.keys(this.videos).length} videos (${size} KB)`);
+    this.showNotification(`Exported ${totalVideos} videos (${size} KB)`);
   }
 
   showImportModal() {
     this.showModal('import-modal');
     const fileInput = document.getElementById('import-file-input');
-    fileInput.value = ''; // Clear any previous selection
+    fileInput.value = '';
   }
 
   async importData() {
@@ -754,28 +1055,32 @@ class Vibrary {
       const fileContent = await this.readFileAsText(file);
       const importData = JSON.parse(fileContent);
 
-      if (!importData.videos || !importData.playlists) {
+      // Handle both old and new format
+      if (importData.historyVideos && importData.libraryVideos) {
+        // New format
+        Object.assign(this.historyVideos, importData.historyVideos);
+        Object.assign(this.libraryVideos, importData.libraryVideos);
+        Object.assign(this.playlists, importData.playlists);
+      } else if (importData.videos) {
+        // Old format - migrate during import
+        await this.migrateToNewArchitecture(importData.videos, importData.playlists || {});
+      } else {
         alert('Invalid VIBRARY export data!');
         return;
       }
 
-      // Merge data
-      const videoCount = Object.keys(importData.videos).length;
-      Object.assign(this.videos, importData.videos);
-      Object.assign(this.playlists, importData.playlists);
-
-      // Import settings if available
       if (importData.settings) {
         this.settings = { ...this.settings, ...importData.settings };
         await this.saveSettings();
       }
 
       await this.saveData();
-      await this.cleanupDuplicates(); // Clean up after import
+      await this.cleanupDuplicates();
       this.render();
 
       this.closeModal('import-modal');
-      this.showNotification(`Imported ${videoCount} videos successfully`);
+      const totalVideos = Object.keys(this.historyVideos).length + Object.keys(this.libraryVideos).length;
+      this.showNotification(`Imported ${totalVideos} videos successfully`);
 
     } catch (error) {
       alert('Error reading or parsing the file. Please check that it\'s a valid VIBRARY backup.');
@@ -790,6 +1095,35 @@ class Vibrary {
       reader.onerror = (e) => reject(e);
       reader.readAsText(file);
     });
+  }
+
+  // Auto-cleanup functionality
+  showAutoCleanupModal() {
+    document.getElementById('cleanup-interval').value = this.settings.autoCleanupInterval;
+    this.showModal('auto-cleanup-modal');
+  }
+
+  async saveAutoCleanup() {
+    const interval = document.getElementById('cleanup-interval').value;
+    this.settings.autoCleanupInterval = interval;
+    await this.saveSettings();
+
+    this.closeModal('auto-cleanup-modal');
+
+    const intervalText = this.getCleanupIntervalText(interval);
+    this.showNotification(`Auto-cleanup set to: ${intervalText}`);
+  }
+
+  getCleanupIntervalText(interval) {
+    const intervals = {
+      'off': 'Never',
+      '1': 'Daily',
+      '7': 'Weekly',
+      '30': 'Monthly',
+      '90': 'Every 3 Months',
+      '365': 'Yearly'
+    };
+    return intervals[interval] || 'Never';
   }
 
   // Blacklist functionality
@@ -878,9 +1212,33 @@ class Vibrary {
     div.textContent = text;
     return div.innerHTML;
   }
+
+  // Handle new video detection from content script
+  async addNewVideo(videoData) {
+    // New videos always start in history
+    this.historyVideos[videoData.id] = videoData;
+    await this.saveData();
+  }
 }
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-  window.vibrary = new Vibrary();
+  console.log('VIBRARY: DOM loaded, initializing...');
+  try {
+    window.vibrary = new Vibrary();
+  } catch (error) {
+    console.error('VIBRARY: Failed to create Vibrary instance:', error);
+  }
 });
+
+// Fallback in case DOMContentLoaded already fired
+if (document.readyState === 'loading') {
+  console.log('VIBRARY: DOM still loading, waiting...');
+} else {
+  console.log('VIBRARY: DOM already loaded, initializing immediately...');
+  try {
+    window.vibrary = new Vibrary();
+  } catch (error) {
+    console.error('VIBRARY: Failed to create Vibrary instance:', error);
+  }
+}
