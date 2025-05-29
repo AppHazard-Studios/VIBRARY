@@ -26,13 +26,6 @@ class Vibrary {
       await this.loadSettings();
       this.bindEvents();
       this.setupAutoRefresh();
-
-      // Ensure search starts hidden if it exists
-      const searchBar = document.getElementById('search-bar');
-      if (searchBar) {
-        searchBar.classList.add('hidden');
-      }
-
       this.render();
       console.log('VIBRARY: Popup initialized successfully');
     } catch (error) {
@@ -88,23 +81,26 @@ class Vibrary {
 
       console.log('VIBRARY: Videos in playlists:', playlistVideoIds.size);
 
-      // Separate videos based on whether they're in playlists
+      // All videos go to history
       this.historyVideos = {};
       this.libraryVideos = {};
 
       Object.entries(oldVideos).forEach(([videoId, video]) => {
         // Skip videos that were marked as deleted in old system
         if (video.deletedFromHistory) {
-          console.log('VIBRARY: Skipping deleted video:', videoId);
+          // If deleted from history but in playlists, only add to library
+          if (playlistVideoIds.has(videoId)) {
+            this.libraryVideos[videoId] = video;
+          }
           return;
         }
 
+        // Add to history
+        this.historyVideos[videoId] = video;
+
+        // If also in playlists, create a copy in library
         if (playlistVideoIds.has(videoId)) {
-          // Video is in playlists - goes to library
-          this.libraryVideos[videoId] = video;
-        } else {
-          // Video is only in history
-          this.historyVideos[videoId] = video;
+          this.libraryVideos[videoId] = { ...video };
         }
       });
 
@@ -249,8 +245,8 @@ class Vibrary {
   setupAutoRefresh() {
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area === 'local' && (changes.historyVideos || changes.libraryVideos)) {
-        this.historyVideos = changes.historyVideos?.newValue || {};
-        this.libraryVideos = changes.libraryVideos?.newValue || {};
+        this.historyVideos = changes.historyVideos?.newValue || this.historyVideos;
+        this.libraryVideos = changes.libraryVideos?.newValue || this.libraryVideos;
         if (this.currentTab === 'history') {
           this.renderHistory();
         }
@@ -259,58 +255,6 @@ class Vibrary {
   }
 
   bindEvents() {
-    // Search functionality
-    toggleSearch() {
-      const searchBar = document.getElementById('search-bar');
-      const searchInput = document.getElementById('search-input');
-      const searchToggle = document.getElementById('search-toggle');
-
-      if (!searchBar || !searchInput) {
-        console.log('VIBRARY: Search elements not found');
-        return;
-      }
-
-      this.searchExpanded = true;
-      searchBar.classList.remove('hidden');
-
-      if (searchToggle) {
-        searchToggle.style.background = 'var(--accent)';
-        searchToggle.style.color = 'white';
-      }
-
-      // Focus the input after animation
-      setTimeout(() => {
-        searchInput.focus();
-      }, 200);
-    }
-
-    closeSearch() {
-      const searchBar = document.getElementById('search-bar');
-      const searchInput = document.getElementById('search-input');
-      const searchToggle = document.getElementById('search-toggle');
-
-      if (!searchBar || !searchInput) {
-        return;
-      }
-
-      // Clear search and hide bar
-      this.searchQuery = '';
-      this.searchExpanded = false;
-      searchInput.value = '';
-      searchBar.classList.add('hidden');
-
-      // Reset button style
-      if (searchToggle) {
-        searchToggle.style.background = '';
-        searchToggle.style.color = '';
-      }
-
-      // Re-render without search filter
-      if (this.currentTab === 'history') {
-        this.renderHistory();
-      }
-    }
-
     // Tab switching
     document.querySelectorAll('.tab').forEach(tab => {
       tab.addEventListener('click', (e) => {
@@ -320,32 +264,54 @@ class Vibrary {
     });
 
     // Controls
-    document.getElementById('rating-filter').addEventListener('change', () => this.renderHistory());
-    document.getElementById('sort-by').addEventListener('change', () => this.renderHistory());
-    document.getElementById('search-toggle').addEventListener('click', () => this.toggleSearch());
-    document.getElementById('search-close').addEventListener('click', () => this.closeSearch());
-    document.getElementById('search-input').addEventListener('input', (e) => {
-      this.searchQuery = e.target.value;
-      this.renderHistory();
-    });
-    document.getElementById('search-input').addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        this.closeSearch();
-      }
-    });
-    document.getElementById('clear-history').addEventListener('click', () => this.clearHistory());
+    const ratingFilter = document.getElementById('rating-filter');
+    const sortBy = document.getElementById('sort-by');
+    const searchInput = document.getElementById('search-input');
+    const clearHistory = document.getElementById('clear-history');
+
+    if (ratingFilter) {
+      ratingFilter.addEventListener('change', () => this.renderHistory());
+    }
+    if (sortBy) {
+      sortBy.addEventListener('change', () => this.renderHistory());
+    }
+    if (searchInput) {
+      searchInput.addEventListener('input', (e) => {
+        this.searchQuery = e.target.value;
+        this.renderHistory();
+      });
+    }
+    if (clearHistory) {
+      clearHistory.addEventListener('click', () => this.clearHistory());
+    }
 
     // Library/Playlists
-    document.getElementById('new-playlist').addEventListener('click', () => this.createPlaylist());
-    document.getElementById('back-btn').addEventListener('click', () => this.showLibrary());
-    document.getElementById('delete-playlist-btn').addEventListener('click', () => this.deleteCurrentPlaylist());
-    document.getElementById('playlist-name').addEventListener('click', () => this.renameCurrentPlaylist());
+    const newPlaylist = document.getElementById('new-playlist');
+    const backBtn = document.getElementById('back-btn');
+    const deletePlaylistBtn = document.getElementById('delete-playlist-btn');
+    const playlistName = document.getElementById('playlist-name');
+
+    if (newPlaylist) {
+      newPlaylist.addEventListener('click', () => this.createPlaylist());
+    }
+    if (backBtn) {
+      backBtn.addEventListener('click', () => this.showLibrary());
+    }
+    if (deletePlaylistBtn) {
+      deletePlaylistBtn.addEventListener('click', () => this.deleteCurrentPlaylist());
+    }
+    if (playlistName) {
+      playlistName.addEventListener('click', () => this.renameCurrentPlaylist());
+    }
 
     // Settings
-    document.getElementById('settings-button').addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.toggleSettingsMenu();
-    });
+    const settingsButton = document.getElementById('settings-button');
+    if (settingsButton) {
+      settingsButton.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.toggleSettingsMenu();
+      });
+    }
 
     document.addEventListener('click', () => this.closeSettingsMenu());
 
@@ -362,26 +328,67 @@ class Vibrary {
 
   bindModalEvents() {
     // Rating modal
-    document.getElementById('save-rating-btn').addEventListener('click', () => this.saveRating());
-    document.getElementById('cancel-rating-btn').addEventListener('click', () => this.closeModal('rating-modal'));
+    const saveRatingBtn = document.getElementById('save-rating-btn');
+    const cancelRatingBtn = document.getElementById('cancel-rating-btn');
+
+    if (saveRatingBtn) {
+      saveRatingBtn.addEventListener('click', () => this.saveRating());
+    }
+    if (cancelRatingBtn) {
+      cancelRatingBtn.addEventListener('click', () => this.closeModal('rating-modal'));
+    }
 
     // Playlist modal
-    document.getElementById('add-to-playlist-btn').addEventListener('click', () => this.addToPlaylist());
-    document.getElementById('cancel-playlist-btn').addEventListener('click', () => this.closeModal('playlist-modal'));
-    document.getElementById('create-new-playlist').addEventListener('click', () => this.createPlaylistInModal());
+    const addToPlaylistBtn = document.getElementById('add-to-playlist-btn');
+    const cancelPlaylistBtn = document.getElementById('cancel-playlist-btn');
+    const createNewPlaylistBtn = document.getElementById('create-new-playlist');
+
+    if (addToPlaylistBtn) {
+      addToPlaylistBtn.addEventListener('click', () => this.addToPlaylist());
+    }
+    if (cancelPlaylistBtn) {
+      cancelPlaylistBtn.addEventListener('click', () => this.closeModal('playlist-modal'));
+    }
+    if (createNewPlaylistBtn) {
+      createNewPlaylistBtn.addEventListener('click', () => this.createPlaylistInModal());
+    }
 
     // Import modal
-    document.getElementById('import-confirm-btn').addEventListener('click', () => this.importData());
-    document.getElementById('import-cancel-btn').addEventListener('click', () => this.closeModal('import-modal'));
+    const importConfirmBtn = document.getElementById('import-confirm-btn');
+    const importCancelBtn = document.getElementById('import-cancel-btn');
+
+    if (importConfirmBtn) {
+      importConfirmBtn.addEventListener('click', () => this.importData());
+    }
+    if (importCancelBtn) {
+      importCancelBtn.addEventListener('click', () => this.closeModal('import-modal'));
+    }
 
     // Auto-cleanup modal
-    document.getElementById('cleanup-save-btn').addEventListener('click', () => this.saveAutoCleanup());
-    document.getElementById('cleanup-cancel-btn').addEventListener('click', () => this.closeModal('auto-cleanup-modal'));
+    const cleanupSaveBtn = document.getElementById('cleanup-save-btn');
+    const cleanupCancelBtn = document.getElementById('cleanup-cancel-btn');
+
+    if (cleanupSaveBtn) {
+      cleanupSaveBtn.addEventListener('click', () => this.saveAutoCleanup());
+    }
+    if (cleanupCancelBtn) {
+      cleanupCancelBtn.addEventListener('click', () => this.closeModal('auto-cleanup-modal'));
+    }
 
     // Blacklist modal
-    document.getElementById('blacklist-save-btn').addEventListener('click', () => this.saveBlacklist());
-    document.getElementById('blacklist-cancel-btn').addEventListener('click', () => this.closeModal('blacklist-modal'));
-    document.getElementById('blacklist-toggle').addEventListener('click', () => this.toggleBlacklist());
+    const blacklistSaveBtn = document.getElementById('blacklist-save-btn');
+    const blacklistCancelBtn = document.getElementById('blacklist-cancel-btn');
+    const blacklistToggle = document.getElementById('blacklist-toggle');
+
+    if (blacklistSaveBtn) {
+      blacklistSaveBtn.addEventListener('click', () => this.saveBlacklist());
+    }
+    if (blacklistCancelBtn) {
+      blacklistCancelBtn.addEventListener('click', () => this.closeModal('blacklist-modal'));
+    }
+    if (blacklistToggle) {
+      blacklistToggle.addEventListener('click', () => this.toggleBlacklist());
+    }
 
     // Star rating
     document.querySelectorAll('.star').forEach((star, index) => {
@@ -392,7 +399,10 @@ class Vibrary {
       star.addEventListener('mouseenter', () => this.highlightStars(index + 1));
     });
 
-    document.querySelector('.star-rating').addEventListener('mouseleave', () => this.updateStars());
+    const starRating = document.querySelector('.star-rating');
+    if (starRating) {
+      starRating.addEventListener('mouseleave', () => this.updateStars());
+    }
 
     // Close modals on background click
     document.querySelectorAll('.modal').forEach(modal => {
@@ -405,12 +415,16 @@ class Vibrary {
   // Settings Menu
   toggleSettingsMenu() {
     const menu = document.getElementById('settings-menu');
-    menu.classList.toggle('active');
+    if (menu) {
+      menu.classList.toggle('active');
+    }
   }
 
   closeSettingsMenu() {
     const menu = document.getElementById('settings-menu');
-    menu.classList.remove('active');
+    if (menu) {
+      menu.classList.remove('active');
+    }
   }
 
   handleSettingsAction(action) {
@@ -580,6 +594,8 @@ class Vibrary {
 
   renderPlaylistsList() {
     const container = document.getElementById('playlist-list');
+    if (!container) return;
+
     const playlists = Object.entries(this.playlists);
 
     if (playlists.length === 0) {
@@ -627,8 +643,15 @@ class Vibrary {
     this.currentPlaylist = playlistName;
 
     // Switch to playlist view
-    document.getElementById('library').classList.remove('active');
-    document.getElementById('playlist-view').classList.add('active');
+    const libraryTab = document.getElementById('library');
+    const playlistView = document.getElementById('playlist-view');
+
+    if (libraryTab) {
+      libraryTab.classList.remove('active');
+    }
+    if (playlistView) {
+      playlistView.classList.add('active');
+    }
 
     this.renderPlaylistView();
   }
@@ -637,8 +660,15 @@ class Vibrary {
     this.currentPlaylist = null;
 
     // Switch back to library list
-    document.getElementById('playlist-view').classList.remove('active');
-    document.getElementById('library').classList.add('active');
+    const playlistView = document.getElementById('playlist-view');
+    const libraryTab = document.getElementById('library');
+
+    if (playlistView) {
+      playlistView.classList.remove('active');
+    }
+    if (libraryTab) {
+      libraryTab.classList.add('active');
+    }
 
     this.renderPlaylistsList();
   }
@@ -650,7 +680,10 @@ class Vibrary {
     const videoIds = this.playlists[playlistName] || [];
 
     // Update header
-    document.getElementById('playlist-name').textContent = playlistName;
+    const playlistNameEl = document.getElementById('playlist-name');
+    if (playlistNameEl) {
+      playlistNameEl.textContent = playlistName;
+    }
 
     // Get valid, non-blacklisted videos from library storage
     const videos = videoIds
@@ -658,7 +691,9 @@ class Vibrary {
         .filter(video => video && !this.isBlacklisted(video));
 
     const container = document.getElementById('playlist-videos');
-    this.renderVideoList(container, videos, { showRemove: true });
+    if (container) {
+      this.renderVideoList(container, videos, { showRemove: true });
+    }
   }
 
   renderVideoList(container, videos, options = {}) {
@@ -734,7 +769,7 @@ class Vibrary {
     if (video.favicon && video.favicon.startsWith('http')) {
       return `<img src="${video.favicon}" class="site-favicon" alt="" onerror="this.style.display='none';">`;
     }
-    return '🌐';
+    return '';
   }
 
   formatRating(rating) {
@@ -746,7 +781,9 @@ class Vibrary {
     // Open video links
     container.querySelectorAll('.video-header').forEach(header => {
       header.addEventListener('click', () => {
-        window.open(header.dataset.url, '_blank');
+        if (header.dataset.url) {
+          window.open(header.dataset.url, '_blank');
+        }
       });
     });
 
@@ -788,7 +825,11 @@ class Vibrary {
     this.currentVideo = this.getVideo(videoId);
     if (!this.currentVideo) return;
 
-    document.getElementById('rating-video-title').textContent = this.currentVideo.title;
+    const titleEl = document.getElementById('rating-video-title');
+    if (titleEl) {
+      titleEl.textContent = this.currentVideo.title;
+    }
+
     this.selectedRating = this.currentVideo.rating || 0;
     this.updateStars();
     this.showModal('rating-modal');
@@ -797,12 +838,14 @@ class Vibrary {
   async saveRating() {
     if (!this.currentVideo) return;
 
-    // Find video in either storage and update
-    if (this.historyVideos[this.currentVideo.id]) {
-      this.historyVideos[this.currentVideo.id].rating = this.selectedRating;
+    const videoId = this.currentVideo.id;
+
+    // Update rating in both storages if the video exists in both
+    if (this.historyVideos[videoId]) {
+      this.historyVideos[videoId].rating = this.selectedRating;
     }
-    if (this.libraryVideos[this.currentVideo.id]) {
-      this.libraryVideos[this.currentVideo.id].rating = this.selectedRating;
+    if (this.libraryVideos[videoId]) {
+      this.libraryVideos[videoId].rating = this.selectedRating;
     }
 
     await this.saveData();
@@ -825,13 +868,19 @@ class Vibrary {
     this.currentVideo = this.getVideo(videoId);
     if (!this.currentVideo) return;
 
-    document.getElementById('playlist-video-title').textContent = this.currentVideo.title;
+    const titleEl = document.getElementById('playlist-video-title');
+    if (titleEl) {
+      titleEl.textContent = this.currentVideo.title;
+    }
+
     this.renderPlaylistOptions();
     this.showModal('playlist-modal');
   }
 
   renderPlaylistOptions() {
     const container = document.getElementById('playlist-options');
+    if (!container) return;
+
     const playlists = Object.keys(this.playlists);
 
     if (playlists.length === 0) {
@@ -867,10 +916,13 @@ class Vibrary {
 
     const videoId = this.currentVideo.id;
 
-    // Move video from history to library if needed
-    if (this.historyVideos[videoId] && !this.libraryVideos[videoId]) {
-      this.libraryVideos[videoId] = this.historyVideos[videoId];
-      delete this.historyVideos[videoId];
+    // Copy video to library if not already there (keep it in history too)
+    if (!this.libraryVideos[videoId]) {
+      // Create a copy in library storage
+      const videoData = this.historyVideos[videoId] || this.libraryVideos[videoId];
+      if (videoData) {
+        this.libraryVideos[videoId] = { ...videoData };
+      }
     }
 
     // Add to playlist if not already there
@@ -930,14 +982,31 @@ class Vibrary {
     this.currentPlaylist = newName.trim();
 
     await this.saveData();
-    document.getElementById('playlist-name').textContent = newName.trim();
+    const playlistNameEl = document.getElementById('playlist-name');
+    if (playlistNameEl) {
+      playlistNameEl.textContent = newName.trim();
+    }
     this.showNotification(`Renamed to "${newName.trim()}"`);
   }
 
   async deleteCurrentPlaylist() {
     if (!this.currentPlaylist || !confirm(`Delete playlist "${this.currentPlaylist}"?`)) return;
 
+    // Get videos in this playlist before deletion
+    const videosInPlaylist = this.playlists[this.currentPlaylist] || [];
+
+    // Delete the playlist
     delete this.playlists[this.currentPlaylist];
+
+    // Check each video that was in the deleted playlist
+    for (const videoId of videosInPlaylist) {
+      // If video is not in any other playlists, remove from library
+      const inOtherPlaylists = Object.values(this.playlists).some(playlist => playlist.includes(videoId));
+      if (!inOtherPlaylists && this.libraryVideos[videoId]) {
+        delete this.libraryVideos[videoId];
+      }
+    }
+
     await this.saveData();
     this.showLibrary();
     this.showNotification('Playlist deleted');
@@ -948,10 +1017,9 @@ class Vibrary {
 
     this.playlists[this.currentPlaylist] = this.playlists[this.currentPlaylist].filter(id => id !== videoId);
 
-    // If video is not in any other playlists, move it back to history
+    // If video is not in any other playlists, remove it from library
     const inOtherPlaylists = Object.values(this.playlists).some(playlist => playlist.includes(videoId));
     if (!inOtherPlaylists && this.libraryVideos[videoId]) {
-      this.historyVideos[videoId] = this.libraryVideos[videoId];
       delete this.libraryVideos[videoId];
     }
 
@@ -961,45 +1029,33 @@ class Vibrary {
   }
 
   async deleteVideo(videoId) {
-    if (!confirm('Delete this video permanently?')) return;
+    if (!confirm('Delete this video from history?')) return;
 
     // Check if video is in any playlists
     const inPlaylists = Object.values(this.playlists).some(playlist => playlist.includes(videoId));
 
     if (inPlaylists) {
-      if (!confirm('This video is in playlists. Delete from everywhere?')) return;
-
-      // Remove from all playlists
-      Object.keys(this.playlists).forEach(playlistName => {
-        this.playlists[playlistName] = this.playlists[playlistName].filter(id => id !== videoId);
-      });
+      // Just remove from history, keep in library and playlists
+      delete this.historyVideos[videoId];
+      await this.saveData();
+      this.render();
+      this.showNotification('Removed from history (still in playlists)');
+    } else {
+      // Not in any playlists, remove completely
+      delete this.historyVideos[videoId];
       delete this.libraryVideos[videoId];
+      await this.saveData();
+      this.render();
+      this.showNotification('Video deleted');
     }
-
-    // Remove from history
-    delete this.historyVideos[videoId];
-
-    await this.saveData();
-    this.render();
-    this.showNotification('Video deleted');
   }
 
   async clearHistory() {
     if (!confirm('Delete all history? Videos in playlists will be preserved.')) return;
 
-    // Only clear videos that are NOT in any playlists
-    const playlistVideoIds = new Set();
-    Object.values(this.playlists).forEach(videoIds => {
-      videoIds.forEach(id => playlistVideoIds.add(id));
-    });
-
-    let deletedCount = 0;
-    Object.keys(this.historyVideos).forEach(videoId => {
-      if (!playlistVideoIds.has(videoId)) {
-        delete this.historyVideos[videoId];
-        deletedCount++;
-      }
-    });
+    // Clear all history videos (library videos remain untouched)
+    const deletedCount = Object.keys(this.historyVideos).length;
+    this.historyVideos = {};
 
     await this.saveData();
     this.render();
@@ -1034,11 +1090,15 @@ class Vibrary {
   showImportModal() {
     this.showModal('import-modal');
     const fileInput = document.getElementById('import-file-input');
-    fileInput.value = '';
+    if (fileInput) {
+      fileInput.value = '';
+    }
   }
 
   async importData() {
     const fileInput = document.getElementById('import-file-input');
+    if (!fileInput) return;
+
     const file = fileInput.files[0];
 
     if (!file) {
@@ -1099,18 +1159,23 @@ class Vibrary {
 
   // Auto-cleanup functionality
   showAutoCleanupModal() {
-    document.getElementById('cleanup-interval').value = this.settings.autoCleanupInterval;
+    const cleanupInterval = document.getElementById('cleanup-interval');
+    if (cleanupInterval) {
+      cleanupInterval.value = this.settings.autoCleanupInterval;
+    }
     this.showModal('auto-cleanup-modal');
   }
 
   async saveAutoCleanup() {
-    const interval = document.getElementById('cleanup-interval').value;
-    this.settings.autoCleanupInterval = interval;
-    await this.saveSettings();
+    const interval = document.getElementById('cleanup-interval');
+    if (interval) {
+      this.settings.autoCleanupInterval = interval.value;
+      await this.saveSettings();
+    }
 
     this.closeModal('auto-cleanup-modal');
 
-    const intervalText = this.getCleanupIntervalText(interval);
+    const intervalText = this.getCleanupIntervalText(this.settings.autoCleanupInterval);
     this.showNotification(`Auto-cleanup set to: ${intervalText}`);
   }
 
@@ -1128,15 +1193,22 @@ class Vibrary {
 
   // Blacklist functionality
   showBlacklistModal() {
-    document.getElementById('blacklist-textarea').value = this.settings.blacklistedDomains.join('\n');
+    const textarea = document.getElementById('blacklist-textarea');
+    if (textarea) {
+      textarea.value = this.settings.blacklistedDomains.join('\n');
+    }
     this.updateBlacklistToggle();
     this.showModal('blacklist-modal');
   }
 
   updateBlacklistToggle() {
     const toggle = document.getElementById('blacklist-toggle');
-    const checkbox = toggle.querySelector('.blacklist-checkbox');
-    checkbox.classList.toggle('checked', this.settings.blacklistEnabled);
+    if (toggle) {
+      const checkbox = toggle.querySelector('.blacklist-checkbox');
+      if (checkbox) {
+        checkbox.classList.toggle('checked', this.settings.blacklistEnabled);
+      }
+    }
   }
 
   async toggleBlacklist() {
@@ -1148,13 +1220,15 @@ class Vibrary {
 
   async saveBlacklist() {
     const textarea = document.getElementById('blacklist-textarea');
-    const domains = textarea.value
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0);
+    if (textarea) {
+      const domains = textarea.value
+          .split('\n')
+          .map(line => line.trim())
+          .filter(line => line.length > 0);
 
-    this.settings.blacklistedDomains = domains;
-    await this.saveSettings();
+      this.settings.blacklistedDomains = domains;
+      await this.saveSettings();
+    }
 
     this.closeModal('blacklist-modal');
     this.render();
@@ -1176,11 +1250,17 @@ class Vibrary {
   }
 
   showModal(modalId) {
-    document.getElementById(modalId).classList.add('active');
+    const modal = document.getElementById(modalId);
+    if (modal) {
+      modal.classList.add('active');
+    }
   }
 
   closeModal(modalId) {
-    document.getElementById(modalId).classList.remove('active');
+    const modal = document.getElementById(modalId);
+    if (modal) {
+      modal.classList.remove('active');
+    }
     this.selectedPlaylistName = null;
   }
 
