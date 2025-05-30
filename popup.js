@@ -748,20 +748,24 @@ class Vibrary {
   }
 
   getThumbnailHtml(video) {
+    const hasCollection = video.thumbnailCollection && video.thumbnailCollection.length > 1;
+
     if (video.thumbnail && video.thumbnail.startsWith('data:image')) {
       return `
-        <div class="video-thumbnail">
+        <div class="video-thumbnail ${hasCollection ? 'has-preview' : ''}" data-video-id="${video.id}">
           <img src="${video.thumbnail}" alt="" onerror="this.parentElement.classList.add('no-image'); this.style.display='none';">
+          ${hasCollection ? '<div class="preview-indicator">🎬</div>' : ''}
         </div>
       `;
     } else if (video.thumbnail && video.thumbnail.startsWith('http')) {
       return `
-        <div class="video-thumbnail">
+        <div class="video-thumbnail ${hasCollection ? 'has-preview' : ''}" data-video-id="${video.id}">
           <img src="${video.thumbnail}" alt="" onerror="this.parentElement.classList.add('no-image'); this.style.display='none';">
+          ${hasCollection ? '<div class="preview-indicator">🎬</div>' : ''}
         </div>
       `;
     } else {
-      return `<div class="video-thumbnail no-image"></div>`;
+      return `<div class="video-thumbnail no-image" data-video-id="${video.id}"></div>`;
     }
   }
 
@@ -785,6 +789,41 @@ class Vibrary {
           window.open(header.dataset.url, '_blank');
         }
       });
+    });
+
+    // HOVER PREVIEW FUNCTIONALITY
+    container.querySelectorAll('.video-thumbnail.has-preview').forEach(thumbnail => {
+      const videoId = thumbnail.dataset.videoId;
+      const video = this.getVideo(videoId);
+
+      if (video && video.thumbnailCollection && video.thumbnailCollection.length > 1) {
+        let previewInterval = null;
+        let currentIndex = 0;
+        const img = thumbnail.querySelector('img');
+        const originalSrc = img.src;
+
+        thumbnail.addEventListener('mouseenter', () => {
+          console.log('🖼️ VIBRARY: Starting thumbnail preview for', video.title);
+
+          previewInterval = setInterval(() => {
+            currentIndex = (currentIndex + 1) % video.thumbnailCollection.length;
+            const currentThumbnail = video.thumbnailCollection[currentIndex];
+
+            if (currentThumbnail && currentThumbnail.thumbnail) {
+              img.src = currentThumbnail.thumbnail;
+            }
+          }, 800); // Change every 800ms
+        });
+
+        thumbnail.addEventListener('mouseleave', () => {
+          if (previewInterval) {
+            clearInterval(previewInterval);
+            previewInterval = null;
+          }
+          img.src = originalSrc; // Reset to original
+          currentIndex = 0;
+        });
+      }
     });
 
     // Rate buttons

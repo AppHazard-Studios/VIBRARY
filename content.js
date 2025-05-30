@@ -1,20 +1,19 @@
-// VIBRARY Content Script - Smart Thumbnail Capture System
+// VIBRARY Content Script - Comprehensive Detection with Smart Thumbnails
 class SmartVideoDetector {
   constructor() {
     this.detectedVideos = new Set();
-    this.pendingCaptures = new Map();
+    this.thumbnailSessions = new Map();
     this.mediaCheckInterval = null;
     this.videoCheckInterval = null;
     this.lastDetectionTime = 0;
     this.debounceTimeout = null;
     this.processingCooldown = new Set();
-    this.thumbnailCaptureQueue = new Map();
     this.immediateDetectionEnabled = true;
     this.init();
   }
 
   init() {
-    console.log('🎬 VIBRARY: Smart video detector with intelligent thumbnails initialized');
+    console.log('🎬 VIBRARY: Comprehensive video detector initialized');
 
     // Primary: Media Session API
     this.setupMediaSessionDetection();
@@ -22,27 +21,24 @@ class SmartVideoDetector {
     // Secondary: Universal video element detection
     this.setupUniversalVideoDetection();
 
-    // Tertiary: Advanced detection for complex sites
+    // Tertiary: Advanced detection for complex sites (RESTORED)
     this.setupAdvancedDetection();
+
+    // Monitor for video pause/end events
+    this.setupVideoEndDetection();
   }
 
   setupMediaSessionDetection() {
     if (!navigator.mediaSession) return;
 
-    // Check immediately on page load
     setTimeout(() => this.checkMediaSession(), 500);
-
-    // Then check periodically
     this.mediaCheckInterval = setInterval(() => {
       this.checkMediaSession();
     }, 2000);
   }
 
   setupUniversalVideoDetection() {
-    // Initial check
     setTimeout(() => this.checkVideoElements(), 1000);
-
-    // Periodic checks
     this.videoCheckInterval = setInterval(() => {
       this.checkVideoElements();
     }, 3000);
@@ -51,7 +47,6 @@ class SmartVideoDetector {
     ['play', 'playing', 'loadedmetadata'].forEach(event => {
       document.addEventListener(event, (e) => {
         if (e.target.tagName === 'VIDEO') {
-          // Immediate detection on play
           this.handleVideoPlay(e.target);
         }
       }, true);
@@ -65,33 +60,7 @@ class SmartVideoDetector {
     }, true);
   }
 
-  async handleVideoPlay(video) {
-    // Immediate detection when video starts playing
-    if (this.immediateDetectionEnabled && video.currentTime >= 0) {
-      console.log('VIBRARY: Video play detected, attempting immediate capture');
-
-      // Basic validation only
-      if (video.duration > 0 && video.videoWidth > 0) {
-        const title = this.extractVideoTitle(video);
-        if (this.isValidTitle(title)) {
-          await this.processVideo({
-            title: title,
-            video: video,
-            source: 'video-element-immediate'
-          });
-        }
-      }
-    }
-  }
-
-  debounceVideoCheck(delay) {
-    if (this.debounceTimeout) clearTimeout(this.debounceTimeout);
-
-    this.debounceTimeout = setTimeout(() => {
-      this.checkVideoElements();
-    }, delay);
-  }
-
+  // RESTORED: Advanced detection that was removed
   setupAdvancedDetection() {
     const observer = new MutationObserver((mutations) => {
       mutations.forEach(mutation => {
@@ -226,6 +195,41 @@ class SmartVideoDetector {
     }, 3000);
   }
 
+  setupVideoEndDetection() {
+    ['pause', 'ended'].forEach(event => {
+      document.addEventListener(event, (e) => {
+        if (e.target.tagName === 'VIDEO') {
+          this.handleVideoStop(e.target);
+        }
+      }, true);
+    });
+  }
+
+  async handleVideoPlay(video) {
+    if (this.immediateDetectionEnabled && video.currentTime >= 0) {
+      console.log('VIBRARY: Video play detected, attempting immediate capture');
+
+      if (video.duration > 0 && video.videoWidth > 0) {
+        const title = this.extractVideoTitle(video);
+        if (this.isValidTitle(title)) {
+          await this.processVideo({
+            title: title,
+            video: video,
+            source: 'video-element-immediate'
+          });
+        }
+      }
+    }
+  }
+
+  debounceVideoCheck(delay) {
+    if (this.debounceTimeout) clearTimeout(this.debounceTimeout);
+
+    this.debounceTimeout = setTimeout(() => {
+      this.checkVideoElements();
+    }, delay);
+  }
+
   async checkMediaSession() {
     try {
       if (!navigator.mediaSession?.metadata?.title) return;
@@ -237,7 +241,6 @@ class SmartVideoDetector {
 
       const dedupeKey = this.generateDedupeKey(title, window.location.href);
 
-      // Prevent rapid duplicate detection
       const now = Date.now();
       if (this.processingCooldown.has(dedupeKey) && now - this.lastDetectionTime < 5000) {
         return;
@@ -248,7 +251,7 @@ class SmartVideoDetector {
 
       setTimeout(() => {
         this.processingCooldown.delete(dedupeKey);
-      }, 10000); // 10 second cooldown per video
+      }, 10000);
 
       await this.processVideo({
         title: title,
@@ -271,16 +274,34 @@ class SmartVideoDetector {
           if (this.isValidTitle(title)) {
             const dedupeKey = this.generateDedupeKey(title, window.location.href);
 
-            // Check cooldown
             const now = Date.now();
-            if (!this.processingCooldown.has(dedupeKey) || now - this.lastDetectionTime > 5000) {
-              await this.processVideo({
-                title: title,
-                video: video,
-                source: 'video-element'
-              });
-              break; // Process one video at a time
+            if (this.processingCooldown.has(dedupeKey)) {
+              continue; // Skip if already processed
             }
+
+            // For YouTube: SKIP generic titles entirely - wait for media session
+            if (this.isYouTube()) {
+              if (this.isGenericTitle(title)) {
+                console.log('VIBRARY: Skipping generic YouTube title, waiting for media session');
+                continue;
+              }
+
+              // Even for non-generic titles, prefer media session if available
+              if (navigator.mediaSession?.metadata?.title) {
+                const mediaTitle = this.cleanTitle(navigator.mediaSession.metadata.title);
+                if (this.isValidTitle(mediaTitle) && mediaTitle !== title) {
+                  console.log('VIBRARY: Media session available, skipping video element detection');
+                  continue;
+                }
+              }
+            }
+
+            await this.processVideo({
+              title: title,
+              video: video,
+              source: 'video-element'
+            });
+            break;
           }
         }
       }
@@ -289,9 +310,8 @@ class SmartVideoDetector {
     }
   }
 
+  // RESTORED: More permissive validation that was working before
   isBasicValidVideo(video) {
-    // Simplified validation for more immediate detection
-
     // Must be playing or have played
     if (video.paused && video.currentTime === 0) return false;
 
@@ -304,7 +324,7 @@ class SmartVideoDetector {
     // Skip if it's clearly a preview/thumbnail
     if (this.isLikelyPreview(video)) return false;
 
-    // For YouTube, be even more lenient
+    // For YouTube, be more lenient
     if (window.location.hostname.includes('youtube.com')) {
       return video.currentTime > 0;
     }
@@ -314,7 +334,6 @@ class SmartVideoDetector {
   }
 
   isLikelyPreview(video) {
-    // Quick check for obvious previews
     const videoClasses = video.className.toLowerCase();
     const parentClasses = video.parentElement?.className.toLowerCase() || '';
 
@@ -337,7 +356,6 @@ class SmartVideoDetector {
   cleanTitle(title) {
     if (!title) return '';
 
-    // Universal title cleaning
     return title
         .replace(/^(Watch|Video|Play)\s*/i, '')
         .replace(/\s*[-|]\s*(YouTube|Vimeo|Dailymotion|Twitch|TikTok|Instagram).*$/i, '')
@@ -346,14 +364,10 @@ class SmartVideoDetector {
   }
 
   extractVideoTitle(video) {
-    // Universal title extraction with priority order
     const titleSources = [
-      // Direct video attributes
       () => video.title,
       () => video.getAttribute('aria-label'),
       () => video.getAttribute('data-title'),
-
-      // Check parent elements for title
       () => {
         let parent = video.parentElement;
         let depth = 0;
@@ -365,15 +379,9 @@ class SmartVideoDetector {
         }
         return null;
       },
-
-      // Meta tags
       () => document.querySelector('meta[property="og:title"]')?.content,
       () => document.querySelector('meta[name="twitter:title"]')?.content,
-
-      // Page title as last resort
       () => document.title,
-
-      // Look for nearby headings
       () => {
         const container = video.closest('article, section, div');
         if (container) {
@@ -402,7 +410,6 @@ class SmartVideoDetector {
     if (!title || title.length < 2) return false;
 
     const badPatterns = /^(loading|untitled|player|debug|error|404|undefined|null|watch|video)$/i;
-
     return !badPatterns.test(title.trim());
   }
 
@@ -422,139 +429,156 @@ class SmartVideoDetector {
     return match ? parseInt(match[1]) * parseInt(match[2]) : 0;
   }
 
-  // SMART THUMBNAIL CAPTURE SYSTEM
-  async captureSmartThumbnails(video) {
-    const duration = video.duration;
-    const videoId = this.getVideoIdentifier(video);
+  // ENHANCED PROGRESSIVE THUMBNAIL CAPTURE
+  async startThumbnailCapture(video, dedupeKey) {
+    const videoKey = this.getVideoKey(video);
 
-    // Always try immediate capture first
-    let initialThumbnail = '';
+    // Don't start if already capturing for this video
+    if (this.thumbnailSessions.has(videoKey)) {
+      return this.thumbnailSessions.get(videoKey).initialThumbnail;
+    }
 
     // Try video poster first
-    if (video.poster) {
-      initialThumbnail = video.poster;
-    }
+    let initialThumbnail = video.poster || '';
 
-    // If no poster, try immediate frame capture
+    // If no poster, capture first frame
     if (!initialThumbnail && video.readyState >= 2) {
-      initialThumbnail = await this.captureVideoThumbnail(video, 0);
+      initialThumbnail = await this.captureVideoFrame(video);
     }
 
-    // Schedule enhanced captures for better quality
-    this.scheduleSmartCaptures(video, videoId, duration);
+    const session = {
+      dedupeKey: dedupeKey,
+      initialThumbnail: initialThumbnail,
+      thumbnails: [], // This will store our captured thumbnails with timestamps
+      timeouts: [],
+      video: video,
+      startTime: Date.now(),
+      videoDuration: video.duration
+    };
+
+    this.thumbnailSessions.set(videoKey, session);
+
+    console.log('🎬 VIBRARY: Starting thumbnail capture session for', dedupeKey);
+
+    // Schedule progressive captures
+    this.scheduleThumbnailCaptures(session, video);
 
     return initialThumbnail;
   }
 
-  scheduleSmartCaptures(video, videoId, duration) {
-    // Clear any existing captures for this video
-    if (this.thumbnailCaptureQueue.has(videoId)) {
-      this.thumbnailCaptureQueue.get(videoId).forEach(timeout => clearTimeout(timeout));
+  scheduleThumbnailCaptures(session, video) {
+    const videoKey = this.getVideoKey(video);
+
+    // Capture strategy: 15s, then every 30s
+    const capturePoints = [15]; // Start with 15 seconds
+
+    // Add captures every 30 seconds up to a reasonable limit
+    for (let time = 45; time < Math.min(video.duration, 300); time += 30) {
+      capturePoints.push(time);
     }
 
-    const timeouts = [];
-    const capturePoints = [];
+    console.log(`📸 VIBRARY: Scheduling ${capturePoints.length} thumbnail captures at:`, capturePoints.map(t => `${t}s`));
 
-    // Determine capture points based on video length and platform
-    const hostname = window.location.hostname;
-
-    if (hostname.includes('youtube.com') || hostname.includes('youtu.be')) {
-      // YouTube specific: ads are usually at start
-      if (duration <= 60) {
-        capturePoints.push(2, 5, duration * 0.5);
-      } else {
-        capturePoints.push(5, 15, 30, duration * 0.3);
-      }
-    } else if (duration <= 15) {
-      // Very short videos (TikTok, Reels, Shorts)
-      capturePoints.push(1, duration * 0.5, duration * 0.75);
-    } else if (duration <= 120) {
-      // Medium videos
-      capturePoints.push(3, 8, 15, duration * 0.5);
-    } else {
-      // Long videos
-      capturePoints.push(5, 15, 30, 60, duration * 0.2);
-    }
-
-    // Schedule captures
     capturePoints.forEach(captureTime => {
-      if (captureTime < duration) {
-        const timeout = setTimeout(() => {
-          this.attemptThumbnailCapture(video, videoId, captureTime);
-        }, captureTime * 1000);
-        timeouts.push(timeout);
-      }
-    });
+      const timeout = setTimeout(async () => {
+        if (this.isVideoStillPlaying(video) && this.thumbnailSessions.has(videoKey)) {
+          const thumbnail = await this.captureVideoFrame(video);
+          if (thumbnail) {
+            session.thumbnails.push({
+              time: video.currentTime,
+              scheduledTime: captureTime,
+              thumbnail: thumbnail,
+              capturedAt: Date.now()
+            });
+            console.log(`📸 VIBRARY: Captured thumbnail at ${video.currentTime.toFixed(1)}s (scheduled for ${captureTime}s)`);
+          }
+        }
+      }, captureTime * 1000);
 
-    this.thumbnailCaptureQueue.set(videoId, timeouts);
+      session.timeouts.push(timeout);
+    });
   }
 
-  async attemptThumbnailCapture(video, videoId, targetTime) {
-    try {
-      // Only capture if video is still playing and past target time
-      if (video.paused || video.currentTime < targetTime - 2) return;
+  isVideoStillPlaying(video) {
+    return !video.paused && !video.ended && video.currentTime > 0;
+  }
 
-      const thumbnail = await this.captureVideoThumbnail(video, 0);
-      if (thumbnail && await this.isGoodQualityThumbnail(thumbnail)) {
-        // Update the stored video with better thumbnail
-        const dedupeKey = this.generateDedupeKey(this.extractVideoTitle(video), window.location.href);
-        await this.updateVideoThumbnail(dedupeKey, thumbnail);
-      }
-    } catch (error) {
-      console.error('VIBRARY: Thumbnail capture failed:', error);
+  async handleVideoStop(video) {
+    const videoKey = this.getVideoKey(video);
+    const session = this.thumbnailSessions.get(videoKey);
+
+    if (!session) return;
+
+    console.log('🛑 VIBRARY: Video stopped, finalizing thumbnail...', {
+      videoDuration: video.duration,
+      capturedThumbnails: session.thumbnails.length,
+      thumbnailTimes: session.thumbnails.map(t => t.time.toFixed(1) + 's')
+    });
+
+    // Clear all pending timeouts
+    session.timeouts.forEach(timeout => clearTimeout(timeout));
+
+    let bestThumbnail = session.initialThumbnail;
+
+    if (session.thumbnails.length > 0 && video.duration > 0) {
+      const midPoint = video.duration / 2;
+
+      console.log(`🎯 VIBRARY: Looking for thumbnail closest to midpoint: ${midPoint.toFixed(1)}s`);
+
+      // Find thumbnail closest to the middle of the video
+      const middleThumbnail = session.thumbnails.reduce((best, current) => {
+        const bestDistance = Math.abs(best.time - midPoint);
+        const currentDistance = Math.abs(current.time - midPoint);
+
+        console.log(`📊 VIBRARY: Comparing thumbnails - Current: ${current.time.toFixed(1)}s (distance: ${currentDistance.toFixed(1)}s), Best: ${best.time.toFixed(1)}s (distance: ${bestDistance.toFixed(1)}s)`);
+
+        return currentDistance < bestDistance ? current : best;
+      });
+
+      bestThumbnail = middleThumbnail.thumbnail;
+      console.log(`🎯 VIBRARY: Selected middle thumbnail from ${middleThumbnail.time.toFixed(1)}s (${middleThumbnail.capturedAt})`);
+    } else {
+      console.log('📷 VIBRARY: No additional thumbnails captured, keeping initial');
     }
+
+    // Update the stored video with the final thumbnail
+    if (bestThumbnail && bestThumbnail !== session.initialThumbnail) {
+      await this.updateVideoThumbnail(session.dedupeKey, bestThumbnail);
+    }
+
+    // Clean up session
+    this.thumbnailSessions.delete(videoKey);
   }
 
-  async isGoodQualityThumbnail(thumbnailDataUrl) {
-    // Quick quality check
-    return new Promise((resolve) => {
-      const img = new Image();
-      img.onload = () => {
-        // Check if image loaded successfully and has reasonable size
-        resolve(img.width > 50 && img.height > 50);
-      };
-      img.onerror = () => resolve(false);
-      img.src = thumbnailDataUrl;
-    });
-  }
-
-  getVideoIdentifier(video) {
+  getVideoKey(video) {
     return `${video.src || video.currentSrc}_${video.duration}_${video.offsetWidth}x${video.offsetHeight}`;
   }
 
-  async captureVideoThumbnail(video, delaySeconds = 0) {
+  async captureVideoFrame(video) {
     return new Promise((resolve) => {
-      const capture = () => {
-        try {
-          if (video.readyState < 2 || video.videoWidth === 0) {
-            resolve('');
-            return;
-          }
+      try {
+        if (video.readyState < 2 || video.videoWidth === 0) {
+          resolve('');
+          return;
+        }
 
-          const canvas = document.createElement('canvas');
-          const aspectRatio = video.videoWidth / video.videoHeight;
+        const canvas = document.createElement('canvas');
+        const aspectRatio = video.videoWidth / video.videoHeight;
 
-          canvas.width = 320;
-          canvas.height = Math.round(320 / aspectRatio);
+        canvas.width = 320;
+        canvas.height = Math.round(320 / aspectRatio);
 
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          if (this.isValidThumbnail(imageData)) {
-            resolve(canvas.toDataURL('image/jpeg', 0.8));
-          } else {
-            resolve('');
-          }
-        } catch (e) {
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        if (this.isValidThumbnail(imageData)) {
+          resolve(canvas.toDataURL('image/jpeg', 0.8));
+        } else {
           resolve('');
         }
-      };
-
-      if (delaySeconds > 0) {
-        setTimeout(capture, delaySeconds * 1000);
-      } else {
-        capture();
+      } catch (e) {
+        resolve('');
       }
     });
   }
@@ -579,16 +603,63 @@ class SmartVideoDetector {
     return avgBrightness > 10 && avgBrightness < 245;
   }
 
+  async updateVideoThumbnail(dedupeKey, newThumbnail, allThumbnails = []) {
+    try {
+      if (!chrome?.storage?.local) return;
+
+      const result = await chrome.storage.local.get(['historyVideos', 'libraryVideos']);
+      const historyVideos = result.historyVideos || {};
+      const libraryVideos = result.libraryVideos || {};
+
+      let updated = false;
+
+      // Update in history
+      const historyEntry = Object.entries(historyVideos).find(([id, video]) =>
+          video.dedupeKey === dedupeKey
+      );
+      if (historyEntry) {
+        const [videoId, videoData] = historyEntry;
+        historyVideos[videoId] = {
+          ...videoData,
+          thumbnail: newThumbnail,
+          // Store all thumbnails for hover preview
+          thumbnailCollection: allThumbnails.length > 0 ? allThumbnails : undefined
+        };
+        updated = true;
+      }
+
+      // Update in library
+      const libraryEntry = Object.entries(libraryVideos).find(([id, video]) =>
+          video.dedupeKey === dedupeKey
+      );
+      if (libraryEntry) {
+        const [videoId, videoData] = libraryEntry;
+        libraryVideos[videoId] = {
+          ...videoData,
+          thumbnail: newThumbnail,
+          thumbnailCollection: allThumbnails.length > 0 ? allThumbnails : undefined
+        };
+        updated = true;
+      }
+
+      if (updated) {
+        await chrome.storage.local.set({
+          historyVideos: historyVideos,
+          libraryVideos: libraryVideos
+        });
+        console.log('🖼️ VIBRARY: Updated thumbnail with middle frame + collection');
+      }
+    } catch (error) {
+      console.error('VIBRARY: Failed to update thumbnail:', error);
+    }
+  }
+
   normalizeUrl(url) {
     try {
-      if (!url || typeof url !== 'string') {
-        console.warn('VIBRARY: Invalid URL provided for normalization:', url);
-        return '';
-      }
+      if (!url || typeof url !== 'string') return '';
 
       const urlObj = new URL(url);
 
-      // Universal parameter cleanup
       const paramsToRemove = [
         'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
         'fbclid', 'gclid', 'ref', 'source', 'tracking', 'track',
@@ -601,7 +672,6 @@ class SmartVideoDetector {
 
       return urlObj.toString();
     } catch (e) {
-      console.warn('VIBRARY: URL normalization failed for:', url, e);
       return url || '';
     }
   }
@@ -610,56 +680,49 @@ class SmartVideoDetector {
     try {
       let currentUrl = window.location.href;
 
-      // Skip generic pages
       const url = new URL(currentUrl);
       const pathname = url.pathname;
 
       if (pathname === '/' || pathname === '/index.html' || pathname === '/home') {
-        console.log('VIBRARY: Skipping home page capture');
         return;
       }
 
       currentUrl = this.normalizeUrl(currentUrl);
-      if (!currentUrl) {
-        console.warn('VIBRARY: Failed to normalize URL, skipping');
-        return;
-      }
+      if (!currentUrl) return;
 
       const cleanTitle = videoInfo.title;
-      if (!cleanTitle) {
-        console.warn('VIBRARY: No valid title, skipping');
-        return;
-      }
+      if (!cleanTitle) return;
 
       const dedupeKey = this.generateDedupeKey(cleanTitle, currentUrl);
 
-      // Prevent rapid duplicates (within 5 seconds)
-      const now = Date.now();
-      if (this.detectedVideos.has(dedupeKey) && now - this.lastDetectionTime < 5000) {
+      // Check if we already processed this exact video
+      if (this.processingCooldown.has(dedupeKey)) {
+        console.log('VIBRARY: Skipping duplicate detection for', dedupeKey);
         return;
       }
 
-      this.detectedVideos.add(dedupeKey);
-      this.lastDetectionTime = now;
-
-      // Clean up old detections
-      if (this.detectedVideos.size > 20) {
-        const entries = Array.from(this.detectedVideos);
-        this.detectedVideos.clear();
-        entries.slice(-10).forEach(entry => this.detectedVideos.add(entry));
+      // For debugging YouTube duplicates
+      if (this.isYouTube()) {
+        console.log('🔍 VIBRARY: YouTube detection:', {
+          title: cleanTitle,
+          source: videoInfo.source,
+          dedupeKey: dedupeKey,
+          url: currentUrl
+        });
       }
+
+      this.processingCooldown.add(dedupeKey);
+      setTimeout(() => this.processingCooldown.delete(dedupeKey), 15000); // Longer cooldown
 
       console.log('✅ VIBRARY: Processing video:', cleanTitle, `(${videoInfo.source})`);
 
-      // Get initial thumbnail quickly
       let thumbnail = videoInfo.thumbnail || '';
 
       if (videoInfo.video && !thumbnail) {
         thumbnail = videoInfo.video.poster || '';
 
         if (!thumbnail) {
-          // Capture initial thumbnail immediately
-          thumbnail = await this.captureSmartThumbnails(videoInfo.video);
+          thumbnail = await this.startThumbnailCapture(videoInfo.video, dedupeKey);
         }
       }
 
@@ -679,80 +742,47 @@ class SmartVideoDetector {
       await this.recordVideo(videoData);
     } catch (error) {
       console.error('VIBRARY: Error processing video:', error);
-
-      if (error.message && error.message.includes('Extension context invalidated')) {
-        console.log('VIBRARY: Extension context invalidated - this is normal during development');
-        return;
-      }
     }
   }
 
   generateDedupeKey(title, url) {
+    const hostname = new URL(url).hostname.replace('www.', '');
+
+    // AGGRESSIVE YouTube deduplication - extract video ID from ANY YouTube URL
+    if (hostname.includes('youtube.com') || hostname.includes('youtu.be')) {
+      let videoId = null;
+
+      // Extract from various YouTube URL formats
+      const patterns = [
+        /[?&]v=([^&]+)/,           // /watch?v=VIDEO_ID
+        /\/shorts\/([^/?]+)/,      // /shorts/VIDEO_ID
+        /\/embed\/([^/?]+)/,       // /embed/VIDEO_ID
+        /youtu\.be\/([^/?]+)/,     // youtu.be/VIDEO_ID
+        /\/v\/([^/?]+)/,           // /v/VIDEO_ID
+        /\/e\/([^/?]+)/            // /e/VIDEO_ID
+      ];
+
+      for (const pattern of patterns) {
+        const match = url.match(pattern);
+        if (match && match[1]) {
+          videoId = match[1].split('&')[0]; // Remove any additional parameters
+          break;
+        }
+      }
+
+      if (videoId) {
+        // Use ONLY the video ID for YouTube - ignore titles completely
+        return `yt_${videoId}`;
+      }
+    }
+
+    // For non-YouTube sites, use hostname + normalized title
     const normalizedTitle = title.toLowerCase()
         .replace(/[^\w\s]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 
-    const hostname = new URL(url).hostname.replace('www.', '');
-
-    // Special handling for YouTube Shorts
-    if (hostname.includes('youtube.com') && url.includes('/shorts/')) {
-      const videoIdMatch = url.match(/\/shorts\/([^/?]+)/);
-      if (videoIdMatch) {
-        return `yt_shorts_${videoIdMatch[1]}_${normalizedTitle.substring(0, 50)}`;
-      }
-    }
-
     return `${hostname}_${normalizedTitle.substring(0, 60)}`;
-  }
-
-  async updateVideoThumbnail(dedupeKey, newThumbnail) {
-    try {
-      if (!chrome || !chrome.storage || !chrome.storage.local) {
-        console.warn('VIBRARY: Chrome storage not available for thumbnail update');
-        return;
-      }
-
-      const result = await chrome.storage.local.get(['historyVideos', 'libraryVideos']);
-      const historyVideos = result.historyVideos || {};
-      const libraryVideos = result.libraryVideos || {};
-
-      let updated = false;
-
-      // Update in history
-      const historyEntry = Object.entries(historyVideos).find(([id, video]) =>
-          video.dedupeKey === dedupeKey
-      );
-      if (historyEntry) {
-        const [videoId, videoData] = historyEntry;
-        historyVideos[videoId] = { ...videoData, thumbnail: newThumbnail };
-        updated = true;
-      }
-
-      // Update in library
-      const libraryEntry = Object.entries(libraryVideos).find(([id, video]) =>
-          video.dedupeKey === dedupeKey
-      );
-      if (libraryEntry) {
-        const [videoId, videoData] = libraryEntry;
-        libraryVideos[videoId] = { ...videoData, thumbnail: newThumbnail };
-        updated = true;
-      }
-
-      if (updated) {
-        await chrome.storage.local.set({
-          historyVideos: historyVideos,
-          libraryVideos: libraryVideos
-        });
-        console.log('🖼️ VIBRARY: Updated thumbnail');
-      }
-    } catch (error) {
-      console.error('VIBRARY: Failed to update thumbnail:', error);
-
-      if (error.message && error.message.includes('Extension context invalidated')) {
-        console.log('VIBRARY: Extension context invalidated during thumbnail update');
-      }
-    }
   }
 
   async getFavicon() {
@@ -787,9 +817,7 @@ class SmartVideoDetector {
     try {
       const hostname = new URL(url).hostname.replace('www.', '');
 
-      // Common sites with specific branding
       const siteNames = {
-        // Video platforms
         'youtube.com': 'YouTube',
         'youtu.be': 'YouTube',
         'vimeo.com': 'Vimeo',
@@ -799,8 +827,6 @@ class SmartVideoDetector {
         'instagram.com': 'Instagram',
         'twitter.com': 'Twitter',
         'x.com': 'X',
-
-        // Streaming services
         'netflix.com': 'Netflix',
         'hulu.com': 'Hulu',
         'disneyplus.com': 'Disney+',
@@ -808,20 +834,9 @@ class SmartVideoDetector {
         'primevideo.com': 'Prime Video',
         'hbomax.com': 'HBO Max',
         'crunchyroll.com': 'Crunchyroll',
-
-        // News/Media
         'cnn.com': 'CNN',
         'bbc.com': 'BBC',
-        'bbc.co.uk': 'BBC',
-
-        // Adult sites
-        'pornhub.com': 'Pornhub',
-        'xvideos.com': 'XVideos',
-        'xhamster.com': 'xHamster',
-        'redtube.com': 'RedTube',
-        'youporn.com': 'YouPorn',
-        'beeg.com': 'Beeg',
-        'tube8.com': 'Tube8'
+        'bbc.co.uk': 'BBC'
       };
 
       if (siteNames[hostname]) {
@@ -830,7 +845,6 @@ class SmartVideoDetector {
 
       return this.extractSiteNameFromDomain(hostname);
     } catch (e) {
-      console.warn('VIBRARY: Error extracting website name from:', url);
       return 'Unknown';
     }
   }
@@ -856,7 +870,6 @@ class SmartVideoDetector {
 
       return hostname.charAt(0).toUpperCase() + hostname.slice(1);
     } catch (e) {
-      console.warn('VIBRARY: Error extracting site name from hostname:', hostname);
       return 'Unknown';
     }
   }
@@ -869,16 +882,12 @@ class SmartVideoDetector {
 
   async recordVideo(videoData) {
     try {
-      if (!chrome || !chrome.storage || !chrome.storage.local) {
-        console.warn('VIBRARY: Chrome storage not available');
-        return;
-      }
+      if (!chrome?.storage?.local) return;
 
       const result = await chrome.storage.local.get(['historyVideos', 'libraryVideos']);
       const historyVideos = result.historyVideos || {};
       const libraryVideos = result.libraryVideos || {};
 
-      // Check for existing by deduplication key
       const existingInHistory = Object.entries(historyVideos).find(([id, video]) =>
           video.dedupeKey === videoData.dedupeKey
       );
@@ -887,7 +896,6 @@ class SmartVideoDetector {
       );
 
       if (existingInHistory) {
-        // Update existing in history
         const [existingId, existingVideo] = existingInHistory;
         historyVideos[existingId] = {
           ...existingVideo,
@@ -898,12 +906,10 @@ class SmartVideoDetector {
         };
         console.log('📝 VIBRARY: Updated existing video in history');
       } else {
-        // Add new video to history
         historyVideos[videoData.id] = videoData;
         console.log('✅ VIBRARY: Recorded new video:', videoData.title);
       }
 
-      // Also update in library if it exists there
       if (existingInLibrary) {
         const [existingId, existingVideo] = existingInLibrary;
         libraryVideos[existingId] = {
@@ -922,10 +928,6 @@ class SmartVideoDetector {
 
     } catch (error) {
       console.error('VIBRARY: Failed to record video:', error);
-
-      if (error.message && error.message.includes('Extension context invalidated')) {
-        console.log('VIBRARY: Extension context invalidated - this is normal during development');
-      }
     }
   }
 
@@ -934,18 +936,17 @@ class SmartVideoDetector {
     if (this.videoCheckInterval) clearInterval(this.videoCheckInterval);
     if (this.debounceTimeout) clearTimeout(this.debounceTimeout);
 
-    // Clean up thumbnail capture timeouts
-    this.thumbnailCaptureQueue.forEach(timeouts => {
-      timeouts.forEach(timeout => clearTimeout(timeout));
-    });
-    this.thumbnailCaptureQueue.clear();
+    for (const session of this.thumbnailSessions.values()) {
+      session.timeouts.forEach(timeout => clearTimeout(timeout));
+    }
+    this.thumbnailSessions.clear();
   }
 }
 
-// Initialize smart detector
+// Initialize detector
 const vibraryDetector = new SmartVideoDetector();
 
-// Cleanup
+// Cleanup on page unload
 window.addEventListener('beforeunload', () => {
   vibraryDetector?.destroy();
 });

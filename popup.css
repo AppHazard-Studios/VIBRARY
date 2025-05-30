@@ -544,6 +544,7 @@ body {
   box-shadow: 0 2px 8px var(--shadow-light);
   position: relative;
   border: 1px solid var(--border-subtle);
+  cursor: pointer;
 }
 
 .video-thumbnail::before {
@@ -564,6 +565,7 @@ body {
   height: 100%;
   object-fit: cover;
   border-radius: calc(var(--radius) - 1px);
+  transition: var(--transition-fast);
 }
 
 .video-thumbnail.no-image {
@@ -575,6 +577,63 @@ body {
   content: '🎬';
   font-size: 24px;
   opacity: 0.6;
+}
+
+/* HOVER PREVIEW STYLES */
+.video-thumbnail.has-preview {
+  border: 2px solid var(--accent-light);
+  position: relative;
+}
+
+.video-thumbnail.has-preview::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 4px var(--accent);
+  opacity: 0.8;
+}
+
+.video-thumbnail.has-preview:hover::after {
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.preview-indicator {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  font-size: 10px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-weight: 600;
+  z-index: 2;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.8;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
+}
+
+.video-thumbnail.has-preview:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.3);
+  transform: scale(1.02);
+}
+
+.video-thumbnail.has-preview:hover img {
+  filter: brightness(1.1);
 }
 
 .video-info {
