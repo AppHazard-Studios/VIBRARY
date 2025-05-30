@@ -30,7 +30,6 @@ class Vibrary {
       console.log('VIBRARY: Popup initialized successfully');
     } catch (error) {
       console.error('VIBRARY: Failed to initialize popup:', error);
-      // Try to render anyway
       this.render();
     }
   }
@@ -50,14 +49,13 @@ class Vibrary {
         this.playlists = result.playlists || {};
       }
 
-      // Clean up duplicates
-      await this.cleanupDuplicates();
+      // Aggressive cleanup of duplicates and bad entries
+      await this.cleanupBadEntries();
 
       const totalVideos = Object.keys(this.historyVideos).length + Object.keys(this.libraryVideos).length;
       console.log(`VIBRARY: Loaded ${totalVideos} videos (${Object.keys(this.historyVideos).length} history, ${Object.keys(this.libraryVideos).length} library)`);
     } catch (error) {
       console.error('VIBRARY: Error loading data:', error);
-      // Fallback to empty state
       this.historyVideos = {};
       this.libraryVideos = {};
       this.playlists = {};
@@ -65,13 +63,9 @@ class Vibrary {
   }
 
   async migrateToNewArchitecture(oldVideos, oldPlaylists) {
-    console.log('VIBRARY: Starting migration...', {
-      videosCount: Object.keys(oldVideos).length,
-      playlistsCount: Object.keys(oldPlaylists).length
-    });
+    console.log('VIBRARY: Starting migration...');
 
     try {
-      // Get all video IDs that are in playlists
       const playlistVideoIds = new Set();
       Object.values(oldPlaylists).forEach(videoIds => {
         if (Array.isArray(videoIds)) {
@@ -79,26 +73,19 @@ class Vibrary {
         }
       });
 
-      console.log('VIBRARY: Videos in playlists:', playlistVideoIds.size);
-
-      // All videos go to history
       this.historyVideos = {};
       this.libraryVideos = {};
 
       Object.entries(oldVideos).forEach(([videoId, video]) => {
-        // Skip videos that were marked as deleted in old system
         if (video.deletedFromHistory) {
-          // If deleted from history but in playlists, only add to library
           if (playlistVideoIds.has(videoId)) {
             this.libraryVideos[videoId] = video;
           }
           return;
         }
 
-        // Add to history
         this.historyVideos[videoId] = video;
 
-        // If also in playlists, create a copy in library
         if (playlistVideoIds.has(videoId)) {
           this.libraryVideos[videoId] = { ...video };
         }
@@ -106,82 +93,97 @@ class Vibrary {
 
       this.playlists = oldPlaylists;
 
-      // Save new architecture and remove old data
       await this.saveData();
       await chrome.storage.local.remove(['videos']);
 
-      console.log(`VIBRARY: Migration complete - ${Object.keys(this.historyVideos).length} history, ${Object.keys(this.libraryVideos).length} library`);
+      console.log(`VIBRARY: Migration complete`);
     } catch (error) {
       console.error('VIBRARY: Migration failed:', error);
-      // Fallback - put everything in history
       this.historyVideos = oldVideos || {};
       this.libraryVideos = {};
       this.playlists = oldPlaylists || {};
     }
   }
 
-  async cleanupDuplicates() {
-    // Clean duplicates within each storage area
-    await this.cleanupDuplicatesInStorage(this.historyVideos, 'history');
-    await this.cleanupDuplicatesInStorage(this.libraryVideos, 'library');
-  }
+  async cleanupBadEntries() {
+    console.log('VIBRARY: Performing aggressive cleanup...');
 
-  async cleanupDuplicatesInStorage(videos, storageName) {
+    let historyChanged = false;
+    let libraryChanged = false;
+
+    // Clean history videos
+    const cleanedHistory = {};
     const seenDedupeKeys = new Set();
-    const seenTitleUrl = new Set();
-    const toRemove = [];
 
-    for (const [videoId, video] of Object.entries(videos)) {
-      if (video.dedupeKey) {
-        if (seenDedupeKeys.has(video.dedupeKey)) {
-          toRemove.push(videoId);
-          continue;
-        }
-        seenDedupeKeys.add(video.dedupeKey);
-      } else {
-        const titleUrlKey = `${video.title}::${this.normalizeUrl(video.url || '')}`;
-        if (seenTitleUrl.has(titleUrlKey)) {
-          toRemove.push(videoId);
-          continue;
-        }
-        seenTitleUrl.add(titleUrlKey);
+    for (const [videoId, video] of Object.entries(this.historyVideos)) {
+      // Skip videos with bad titles
+      if (!this.isValidVideoEntry(video)) {
+        console.log('VIBRARY: Removing bad history entry:', video.title);
+        historyChanged = true;
+        continue;
       }
+
+      // Skip duplicates
+      if (seenDedupeKeys.has(video.dedupeKey)) {
+        console.log('VIBRARY: Removing duplicate history entry:', video.title);
+        historyChanged = true;
+        continue;
+      }
+
+      cleanedHistory[videoId] = video;
+      seenDedupeKeys.add(video.dedupeKey);
     }
 
-    if (toRemove.length > 0) {
-      console.log(`VIBRARY: Removing ${toRemove.length} duplicate videos from ${storageName}`);
-      for (const videoId of toRemove) {
-        delete videos[videoId];
+    // Clean library videos
+    const cleanedLibrary = {};
+    const seenLibraryKeys = new Set();
 
-        // Also remove from playlists if library cleanup
-        if (storageName === 'library') {
-          Object.keys(this.playlists).forEach(playlistName => {
-            this.playlists[playlistName] = this.playlists[playlistName].filter(id => id !== videoId);
-          });
-        }
+    for (const [videoId, video] of Object.entries(this.libraryVideos)) {
+      if (!this.isValidVideoEntry(video)) {
+        console.log('VIBRARY: Removing bad library entry:', video.title);
+        libraryChanged = true;
+        continue;
       }
+
+      if (seenLibraryKeys.has(video.dedupeKey)) {
+        console.log('VIBRARY: Removing duplicate library entry:', video.title);
+        libraryChanged = true;
+        continue;
+      }
+
+      cleanedLibrary[videoId] = video;
+      seenLibraryKeys.add(video.dedupeKey);
+    }
+
+    // Update if changed
+    if (historyChanged) {
+      this.historyVideos = cleanedHistory;
+    }
+    if (libraryChanged) {
+      this.libraryVideos = cleanedLibrary;
+    }
+
+    if (historyChanged || libraryChanged) {
       await this.saveData();
+      console.log('VIBRARY: Cleanup completed');
     }
   }
 
-  normalizeUrl(url) {
-    try {
-      const urlObj = new URL(url);
+  isValidVideoEntry(video) {
+    if (!video || !video.title || video.title.length < 3) return false;
 
-      const paramsToRemove = [
-        'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term',
-        'fbclid', 'gclid', 'ref', 'source', 'tracking', 'track',
-        'gallery', 'edit', 'share', 'social', 'from', 'via'
-      ];
+    // Remove entries with obvious UI control text
+    const badTitlePatterns = [
+      /^(?:video|player|watch|loading|error|null|undefined|untitled|stream|live)$/i,
+      /^(?:speed|click|hold|fast forward|video paused|loading|times).*$/i,
+      /^\d+\.?\d*\s*(?:x|loading|speed|click|hold|fast|forward|paused).*$/i,
+      /^[\d\s\.,x]+$/,
+      /speed.*click.*hold.*fast.*forward/i,
+      /video.*paused/i,
+      /loading.*speed/i
+    ];
 
-      paramsToRemove.forEach(param => {
-        urlObj.searchParams.delete(param);
-      });
-
-      return urlObj.toString();
-    } catch (e) {
-      return url;
-    }
+    return !badTitlePatterns.some(pattern => pattern.test(video.title.trim()));
   }
 
   async loadSettings() {
@@ -197,6 +199,12 @@ class Vibrary {
 
   async saveData() {
     try {
+      // Check if extension context is valid
+      if (!chrome?.storage?.local) {
+        console.warn('VIBRARY: Extension context invalid, cannot save data');
+        return;
+      }
+
       await chrome.storage.local.set({
         historyVideos: this.historyVideos,
         libraryVideos: this.libraryVideos,
@@ -204,11 +212,19 @@ class Vibrary {
       });
     } catch (error) {
       console.error('Error saving data:', error);
+      if (error.message.includes('Extension context invalidated')) {
+        this.showNotification('Extension reloaded - please refresh the page');
+      }
     }
   }
 
   async saveSettings() {
     try {
+      if (!chrome?.storage?.local) {
+        console.warn('VIBRARY: Extension context invalid, cannot save settings');
+        return;
+      }
+
       await chrome.storage.local.set({
         blacklistEnabled: this.settings.blacklistEnabled,
         blacklistedDomains: this.settings.blacklistedDomains,
@@ -216,15 +232,16 @@ class Vibrary {
       });
     } catch (error) {
       console.error('Error saving settings:', error);
+      if (error.message.includes('Extension context invalidated')) {
+        this.showNotification('Extension reloaded - please refresh the page');
+      }
     }
   }
 
-  // Get video from either storage
   getVideo(videoId) {
     return this.historyVideos[videoId] || this.libraryVideos[videoId];
   }
 
-  // Get all videos (combined)
   getAllVideos() {
     return { ...this.historyVideos, ...this.libraryVideos };
   }
@@ -527,27 +544,27 @@ class Vibrary {
     const ratingFilterValue = ratingFilter ? ratingFilter.value : 'all';
     const sortByValue = sortBy ? sortBy.value : 'date';
 
-    // Get only history videos
-    let videos = Object.entries(this.historyVideos).map(([id, video]) => ({ id, ...video }));
-    console.log(`VIBRARY: Found ${videos.length} history videos`);
+    // Get only valid history videos
+    let videos = Object.entries(this.historyVideos)
+        .map(([id, video]) => ({ id, ...video }))
+        .filter(video => this.isValidVideoEntry(video)); // Filter out bad entries
+
+    console.log(`VIBRARY: Found ${videos.length} valid history videos`);
 
     // Filter blacklisted videos
     if (this.settings.blacklistEnabled) {
       videos = videos.filter(video => !this.isBlacklisted(video));
-      console.log(`VIBRARY: After blacklist filter: ${videos.length} videos`);
     }
 
     // Search filter
     if (this.searchQuery.trim()) {
       videos = this.filterVideosBySearch(videos, this.searchQuery.trim());
-      console.log(`VIBRARY: After search filter "${this.searchQuery}": ${videos.length} videos`);
     }
 
     // Filter by rating
     if (ratingFilterValue !== 'all') {
       const rating = parseInt(ratingFilterValue);
       videos = videos.filter(v => v.rating === rating);
-      console.log(`VIBRARY: After rating filter ${rating}: ${videos.length} videos`);
     }
 
     // Sort
@@ -566,17 +583,14 @@ class Vibrary {
     const lowerQuery = query.toLowerCase();
 
     return videos.filter(video => {
-      // Search in title
       if (video.title && video.title.toLowerCase().includes(lowerQuery)) {
         return true;
       }
 
-      // Search in website/source
       if (video.website && video.website.toLowerCase().includes(lowerQuery)) {
         return true;
       }
 
-      // Search in URL hostname
       if (video.url) {
         try {
           const hostname = new URL(video.url).hostname.replace('www.', '');
@@ -609,7 +623,6 @@ class Vibrary {
     }
 
     container.innerHTML = playlists.map(([name, videoIds]) => {
-      // Get first valid, non-blacklisted video for thumbnail
       let thumbnail = '📁';
       const firstValidVideo = videoIds
           .map(id => this.libraryVideos[id])
@@ -642,7 +655,6 @@ class Vibrary {
   showPlaylist(playlistName) {
     this.currentPlaylist = playlistName;
 
-    // Switch to playlist view
     const libraryTab = document.getElementById('library');
     const playlistView = document.getElementById('playlist-view');
 
@@ -659,7 +671,6 @@ class Vibrary {
   showLibrary() {
     this.currentPlaylist = null;
 
-    // Switch back to library list
     const playlistView = document.getElementById('playlist-view');
     const libraryTab = document.getElementById('library');
 
@@ -679,16 +690,14 @@ class Vibrary {
     const playlistName = this.currentPlaylist;
     const videoIds = this.playlists[playlistName] || [];
 
-    // Update header
     const playlistNameEl = document.getElementById('playlist-name');
     if (playlistNameEl) {
       playlistNameEl.textContent = playlistName;
     }
 
-    // Get valid, non-blacklisted videos from library storage
     const videos = videoIds
         .map(id => this.libraryVideos[id] ? { id, ...this.libraryVideos[id] } : null)
-        .filter(video => video && !this.isBlacklisted(video));
+        .filter(video => video && !this.isBlacklisted(video) && this.isValidVideoEntry(video));
 
     const container = document.getElementById('playlist-videos');
     if (container) {
@@ -720,7 +729,7 @@ class Vibrary {
       const thumbnailHtml = this.getThumbnailHtml(video);
 
       return `
-        <div class="video-item">
+        <div class="video-item" data-video-id="${video.id}">
           <div class="video-header" data-url="${this.escapeHtml(video.url)}">
             ${thumbnailHtml}
             <div class="video-info">
@@ -743,7 +752,6 @@ class Vibrary {
       `;
     }).join('');
 
-    // Bind video action events
     this.bindVideoActions(container);
   }
 
@@ -758,7 +766,7 @@ class Vibrary {
     return `
       <div class="video-thumbnail ${hasCollection ? 'has-preview' : ''} ${!video.thumbnail ? 'no-image' : ''}" 
            data-video-id="${video.id}"
-           title="${hasCollection ? 'Hover to preview • Click to watch' : 'Click to watch'}">
+           title="${hasCollection ? 'Hover card to preview • Click to watch' : 'Click to watch'}">
         ${thumbnailContent}
         ${hasCollection ? `<div class="preview-indicator" title="${video.thumbnailCollection.length} preview frames available">▶</div>` : ''}
       </div>
@@ -778,12 +786,95 @@ class Vibrary {
   }
 
   bindVideoActions(container) {
+    // Simplified hover preview - hover on entire video card
+    container.querySelectorAll('.video-item').forEach(videoItem => {
+      const videoId = videoItem.dataset.videoId;
+      if (!videoId) return;
+
+      const video = this.getVideo(videoId);
+      if (!video) return;
+
+      const thumbnail = videoItem.querySelector('.video-thumbnail');
+      if (!thumbnail) return;
+
+      // Check if we have multiple thumbnails
+      if (video.thumbnailCollection && video.thumbnailCollection.length > 1) {
+        let previewInterval = null;
+        let currentIndex = 0;
+        const img = thumbnail.querySelector('img');
+        if (!img) return;
+
+        const originalSrc = img.src;
+        const thumbnails = video.thumbnailCollection;
+
+        // Mouse enter on entire video card
+        videoItem.addEventListener('mouseenter', () => {
+          console.log(`🖼️ VIBRARY: Starting preview for "${video.title}"`);
+
+          currentIndex = 1 % thumbnails.length;
+          if (thumbnails[currentIndex]?.thumbnail) {
+            img.src = thumbnails[currentIndex].thumbnail;
+          }
+
+          previewInterval = setInterval(() => {
+            currentIndex = (currentIndex + 1) % thumbnails.length;
+            const currentThumb = thumbnails[currentIndex];
+
+            if (currentThumb?.thumbnail) {
+              img.src = currentThumb.thumbnail;
+
+              const timeIndicator = thumbnail.querySelector('.time-indicator') ||
+                  document.createElement('div');
+              timeIndicator.className = 'time-indicator';
+              timeIndicator.textContent = this.formatTime(currentThumb.time);
+              thumbnail.appendChild(timeIndicator);
+            }
+          }, 1000);
+
+          thumbnail.classList.add('previewing');
+        });
+
+        // Mouse leave from entire video card
+        videoItem.addEventListener('mouseleave', () => {
+          if (previewInterval) {
+            clearInterval(previewInterval);
+            previewInterval = null;
+          }
+
+          img.src = originalSrc;
+          currentIndex = 0;
+
+          thumbnail.classList.remove('previewing');
+          const timeIndicator = thumbnail.querySelector('.time-indicator');
+          if (timeIndicator) {
+            timeIndicator.remove();
+          }
+        });
+
+        // Click thumbnail to open video at specific time
+        thumbnail.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+
+          if (video.url) {
+            const currentTime = thumbnails[currentIndex]?.time || 0;
+            let targetUrl = video.url;
+
+            if (video.url.includes('youtube.com') || video.url.includes('youtu.be')) {
+              const separator = video.url.includes('?') ? '&' : '?';
+              targetUrl = `${video.url}${separator}t=${Math.floor(currentTime)}`;
+            }
+
+            window.open(targetUrl, '_blank');
+          }
+        });
+      }
+    });
+
     // Open video links
     container.querySelectorAll('.video-header').forEach(header => {
       header.addEventListener('click', (e) => {
-        // Don't open link if clicking on thumbnail with preview
-        if (e.target.closest('.video-thumbnail.has-preview')) {
-          e.stopPropagation();
+        if (e.target.closest('.video-thumbnail')) {
           return;
         }
 
@@ -793,123 +884,7 @@ class Vibrary {
       });
     });
 
-    // ENHANCED HOVER PREVIEW FUNCTIONALITY
-    container.querySelectorAll('.video-thumbnail').forEach(thumbnail => {
-      const videoId = thumbnail.dataset.videoId;
-      if (!videoId) return;
-
-      const video = this.getVideo(videoId);
-      if (!video) return;
-
-      // Check if we have multiple thumbnails
-      if (video.thumbnailCollection && video.thumbnailCollection.length > 1) {
-        // Add the has-preview class if not already present
-        thumbnail.classList.add('has-preview');
-
-        let previewInterval = null;
-        let currentIndex = 0;
-        const img = thumbnail.querySelector('img');
-        if (!img) return;
-
-        const originalSrc = img.src;
-        const thumbnails = video.thumbnailCollection;
-
-        // Preload all thumbnails for smooth transition
-        const preloadedImages = [];
-        thumbnails.forEach((thumb, index) => {
-          if (thumb.thumbnail) {
-            const preloadImg = new Image();
-            preloadImg.src = thumb.thumbnail;
-            preloadedImages[index] = preloadImg;
-          }
-        });
-
-        // Mouse enter - start preview
-        thumbnail.addEventListener('mouseenter', () => {
-          console.log(`🖼️ VIBRARY: Starting preview for "${video.title}" with ${thumbnails.length} frames`);
-
-          // Immediately show first alternate thumbnail
-          currentIndex = 1 % thumbnails.length;
-          if (thumbnails[currentIndex]?.thumbnail) {
-            img.src = thumbnails[currentIndex].thumbnail;
-          }
-
-          // Start cycling through thumbnails
-          previewInterval = setInterval(() => {
-            currentIndex = (currentIndex + 1) % thumbnails.length;
-            const currentThumb = thumbnails[currentIndex];
-
-            if (currentThumb?.thumbnail) {
-              img.src = currentThumb.thumbnail;
-
-              // Add time indicator
-              const timeIndicator = thumbnail.querySelector('.time-indicator') ||
-                  document.createElement('div');
-              timeIndicator.className = 'time-indicator';
-              timeIndicator.textContent = this.formatTime(currentThumb.time);
-              thumbnail.appendChild(timeIndicator);
-            }
-          }, 1000); // Change every second
-
-          // Add playing indicator
-          thumbnail.classList.add('previewing');
-        });
-
-        // Mouse leave - stop preview
-        thumbnail.addEventListener('mouseleave', () => {
-          // Clear interval
-          if (previewInterval) {
-            clearInterval(previewInterval);
-            previewInterval = null;
-          }
-
-          // Reset to original thumbnail
-          img.src = originalSrc;
-          currentIndex = 0;
-
-          // Remove indicators
-          thumbnail.classList.remove('previewing');
-          const timeIndicator = thumbnail.querySelector('.time-indicator');
-          if (timeIndicator) {
-            timeIndicator.remove();
-          }
-
-          console.log('🖼️ VIBRARY: Stopped preview');
-        });
-
-        // Click to open video at specific time
-        thumbnail.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-
-          if (video.url) {
-            // Try to open at current preview time
-            const currentTime = thumbnails[currentIndex]?.time || 0;
-            let targetUrl = video.url;
-
-            // Add timestamp for YouTube
-            if (video.url.includes('youtube.com') || video.url.includes('youtu.be')) {
-              const separator = video.url.includes('?') ? '&' : '?';
-              targetUrl = `${video.url}${separator}t=${Math.floor(currentTime)}`;
-            }
-
-            window.open(targetUrl, '_blank');
-          }
-        });
-      } else {
-        // Single thumbnail - just make it clickable
-        thumbnail.addEventListener('click', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-
-          if (video.url) {
-            window.open(video.url, '_blank');
-          }
-        });
-      }
-    });
-
-    // Rate buttons
+    // Action buttons
     container.querySelectorAll('.rate-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -917,7 +892,6 @@ class Vibrary {
       });
     });
 
-    // Playlist buttons
     container.querySelectorAll('.playlist-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -925,7 +899,6 @@ class Vibrary {
       });
     });
 
-    // Remove buttons (from playlist)
     container.querySelectorAll('.remove-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -933,7 +906,6 @@ class Vibrary {
       });
     });
 
-    // Delete buttons (from history)
     container.querySelectorAll('.delete-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -942,7 +914,6 @@ class Vibrary {
     });
   }
 
-  // Helper method to format time
   formatTime(seconds) {
     if (!seconds || seconds < 0) return '0:00';
 
@@ -971,7 +942,6 @@ class Vibrary {
 
     const videoId = this.currentVideo.id;
 
-    // Update rating in both storages if the video exists in both
     if (this.historyVideos[videoId]) {
       this.historyVideos[videoId].rating = this.selectedRating;
     }
@@ -1027,7 +997,6 @@ class Vibrary {
       <div class="playlist-option" data-playlist="${this.escapeHtml(name)}">${this.escapeHtml(name)}</div>
     `).join('');
 
-    // Bind playlist option events
     container.querySelectorAll('.playlist-option').forEach(option => {
       option.addEventListener('click', () => {
         this.selectPlaylist(option.dataset.playlist);
@@ -1047,16 +1016,13 @@ class Vibrary {
 
     const videoId = this.currentVideo.id;
 
-    // Copy video to library if not already there (keep it in history too)
     if (!this.libraryVideos[videoId]) {
-      // Create a copy in library storage
       const videoData = this.historyVideos[videoId] || this.libraryVideos[videoId];
       if (videoData) {
         this.libraryVideos[videoId] = { ...videoData };
       }
     }
 
-    // Add to playlist if not already there
     if (!this.playlists[this.selectedPlaylistName].includes(videoId)) {
       this.playlists[this.selectedPlaylistName].push(videoId);
       await this.saveData();
@@ -1123,15 +1089,11 @@ class Vibrary {
   async deleteCurrentPlaylist() {
     if (!this.currentPlaylist || !confirm(`Delete playlist "${this.currentPlaylist}"?`)) return;
 
-    // Get videos in this playlist before deletion
     const videosInPlaylist = this.playlists[this.currentPlaylist] || [];
 
-    // Delete the playlist
     delete this.playlists[this.currentPlaylist];
 
-    // Check each video that was in the deleted playlist
     for (const videoId of videosInPlaylist) {
-      // If video is not in any other playlists, remove from library
       const inOtherPlaylists = Object.values(this.playlists).some(playlist => playlist.includes(videoId));
       if (!inOtherPlaylists && this.libraryVideos[videoId]) {
         delete this.libraryVideos[videoId];
@@ -1148,7 +1110,6 @@ class Vibrary {
 
     this.playlists[this.currentPlaylist] = this.playlists[this.currentPlaylist].filter(id => id !== videoId);
 
-    // If video is not in any other playlists, remove it from library
     const inOtherPlaylists = Object.values(this.playlists).some(playlist => playlist.includes(videoId));
     if (!inOtherPlaylists && this.libraryVideos[videoId]) {
       delete this.libraryVideos[videoId];
@@ -1162,17 +1123,14 @@ class Vibrary {
   async deleteVideo(videoId) {
     if (!confirm('Delete this video from history?')) return;
 
-    // Check if video is in any playlists
     const inPlaylists = Object.values(this.playlists).some(playlist => playlist.includes(videoId));
 
     if (inPlaylists) {
-      // Just remove from history, keep in library and playlists
       delete this.historyVideos[videoId];
       await this.saveData();
       this.render();
       this.showNotification('Removed from history (still in playlists)');
     } else {
-      // Not in any playlists, remove completely
       delete this.historyVideos[videoId];
       delete this.libraryVideos[videoId];
       await this.saveData();
@@ -1184,7 +1142,6 @@ class Vibrary {
   async clearHistory() {
     if (!confirm('Delete all history? Videos in playlists will be preserved.')) return;
 
-    // Clear all history videos (library videos remain untouched)
     const deletedCount = Object.keys(this.historyVideos).length;
     this.historyVideos = {};
 
@@ -1201,7 +1158,7 @@ class Vibrary {
       playlists: this.playlists,
       settings: this.settings,
       exportDate: new Date().toISOString(),
-      version: '2.5'
+      version: '2.6'
     };
 
     const dataStr = JSON.stringify(exportData, null, 2);
@@ -1246,14 +1203,11 @@ class Vibrary {
       const fileContent = await this.readFileAsText(file);
       const importData = JSON.parse(fileContent);
 
-      // Handle both old and new format
       if (importData.historyVideos && importData.libraryVideos) {
-        // New format
         Object.assign(this.historyVideos, importData.historyVideos);
         Object.assign(this.libraryVideos, importData.libraryVideos);
         Object.assign(this.playlists, importData.playlists);
       } else if (importData.videos) {
-        // Old format - migrate during import
         await this.migrateToNewArchitecture(importData.videos, importData.playlists || {});
       } else {
         alert('Invalid VIBRARY export data!');
@@ -1266,7 +1220,7 @@ class Vibrary {
       }
 
       await this.saveData();
-      await this.cleanupDuplicates();
+      await this.cleanupBadEntries();
       this.render();
 
       this.closeModal('import-modal');
@@ -1423,13 +1377,6 @@ class Vibrary {
     div.textContent = text;
     return div.innerHTML;
   }
-
-  // Handle new video detection from content script
-  async addNewVideo(videoData) {
-    // New videos always start in history
-    this.historyVideos[videoData.id] = videoData;
-    await this.saveData();
-  }
 }
 
 // Initialize
@@ -1442,7 +1389,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-// Fallback in case DOMContentLoaded already fired
 if (document.readyState === 'loading') {
   console.log('VIBRARY: DOM still loading, waiting...');
 } else {

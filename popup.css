@@ -476,6 +476,7 @@ body {
   gap: 16px;
 }
 
+/* ENHANCED VIDEO ITEM - Simplified hover targets */
 .video-item {
   background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-elevated) 100%);
   border: 1px solid var(--border);
@@ -484,6 +485,7 @@ body {
   transition: var(--transition);
   position: relative;
   overflow: hidden;
+  cursor: pointer;
 }
 
 .video-item::before {
@@ -496,6 +498,7 @@ body {
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
 }
 
+/* Enhanced hover state for entire video card */
 .video-item:hover {
   background: linear-gradient(135deg, var(--bg-elevated) 0%, var(--bg-hover) 100%);
   transform: translateY(-2px);
@@ -503,19 +506,20 @@ body {
   border-color: var(--accent);
 }
 
+/* Video header contains thumbnail and info */
 .video-header {
   display: flex;
   align-items: flex-start;
   gap: 14px;
   margin-bottom: 12px;
-  cursor: pointer;
   padding: 4px;
   border-radius: var(--radius);
   transition: var(--transition-fast);
 }
 
+/* Remove separate hover on video-header since we hover on entire card */
 .video-header:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: none;
 }
 
 /* Enhanced thumbnail preview styles */
@@ -534,7 +538,6 @@ body {
   box-shadow: 0 2px 8px var(--shadow-light);
   position: relative;
   border: 1px solid var(--border-subtle);
-  cursor: pointer;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -547,6 +550,7 @@ body {
   transition: opacity 0.3s ease;
 }
 
+/* When video item is hovered, animate the thumbnail */
 .video-item:hover .video-thumbnail::before {
   opacity: 1;
 }
@@ -571,13 +575,14 @@ body {
   opacity: 0.6;
 }
 
-/* ENHANCED HOVER PREVIEW STYLES */
+/* ENHANCED HOVER PREVIEW STYLES - Work with entire video card hover */
 .video-thumbnail.has-preview {
   border: 2px solid transparent;
   background: linear-gradient(135deg, var(--bg-hover) 0%, var(--bg-tertiary) 100%);
 }
 
-.video-thumbnail.has-preview:hover {
+/* When the parent video-item is hovered and has preview capability */
+.video-item:hover .video-thumbnail.has-preview {
   border-color: var(--accent);
   box-shadow: 0 0 20px rgba(59, 130, 246, 0.4);
   transform: scale(1.05);
@@ -600,7 +605,8 @@ body {
   pointer-events: none;
 }
 
-.video-thumbnail.has-preview:hover .preview-indicator {
+/* Hide preview indicator when parent video-item is hovered */
+.video-item:hover .preview-indicator {
   opacity: 0;
   transform: scale(0.8);
 }
@@ -666,7 +672,7 @@ body {
   animation: shimmer 1.5s infinite;
 }
 
-/* Pulse animation */
+/* Animations */
 @keyframes pulse {
   0%, 100% {
     opacity: 0.8;
@@ -678,7 +684,6 @@ body {
   }
 }
 
-/* Fade in animation */
 @keyframes fadeIn {
   from {
     opacity: 0;
@@ -690,7 +695,6 @@ body {
   }
 }
 
-/* Border rotate animation */
 @keyframes borderRotate {
   from {
     transform: rotate(0deg);
@@ -700,7 +704,6 @@ body {
   }
 }
 
-/* Subtle pulse animation */
 @keyframes subtlePulse {
   0%, 100% {
     transform: scale(1);
@@ -710,7 +713,6 @@ body {
   }
 }
 
-/* Shimmer animation */
 @keyframes shimmer {
   0% {
     transform: translateX(-100%);
@@ -718,24 +720,6 @@ body {
   100% {
     transform: translateX(100%);
   }
-}
-
-/* Tooltip for preview instructions */
-.video-thumbnail.has-preview[title]:hover::after {
-  content: attr(title);
-  position: absolute;
-  bottom: -30px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.9);
-  color: white;
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-  white-space: nowrap;
-  z-index: 100;
-  pointer-events: none;
-  animation: fadeIn 0.2s ease 0.5s both;
 }
 
 .video-info {
@@ -1197,7 +1181,7 @@ textarea::placeholder {
 
 /* Responsive adjustments */
 @media (max-width: 440px) {
-  .video-thumbnail.has-preview:hover {
+  .video-item:hover .video-thumbnail.has-preview {
     transform: scale(1.02);
   }
 
