@@ -750,23 +750,19 @@ class Vibrary {
   getThumbnailHtml(video) {
     const hasCollection = video.thumbnailCollection && video.thumbnailCollection.length > 1;
 
-    if (video.thumbnail && video.thumbnail.startsWith('data:image')) {
-      return `
-        <div class="video-thumbnail ${hasCollection ? 'has-preview' : ''}" data-video-id="${video.id}">
-          <img src="${video.thumbnail}" alt="" onerror="this.parentElement.classList.add('no-image'); this.style.display='none';">
-          ${hasCollection ? '<div class="preview-indicator">🎬</div>' : ''}
-        </div>
-      `;
-    } else if (video.thumbnail && video.thumbnail.startsWith('http')) {
-      return `
-        <div class="video-thumbnail ${hasCollection ? 'has-preview' : ''}" data-video-id="${video.id}">
-          <img src="${video.thumbnail}" alt="" onerror="this.parentElement.classList.add('no-image'); this.style.display='none';">
-          ${hasCollection ? '<div class="preview-indicator">🎬</div>' : ''}
-        </div>
-      `;
-    } else {
-      return `<div class="video-thumbnail no-image" data-video-id="${video.id}"></div>`;
+    let thumbnailContent = '';
+    if (video.thumbnail) {
+      thumbnailContent = `<img src="${video.thumbnail}" alt="" onerror="this.parentElement.classList.add('no-image'); this.style.display='none';">`;
     }
+
+    return `
+      <div class="video-thumbnail ${hasCollection ? 'has-preview' : ''} ${!video.thumbnail ? 'no-image' : ''}" 
+           data-video-id="${video.id}"
+           title="${hasCollection ? 'Hover to preview • Click to watch' : 'Click to watch'}">
+        ${thumbnailContent}
+        ${hasCollection ? `<div class="preview-indicator" title="${video.thumbnailCollection.length} preview frames available">▶</div>` : ''}
+      </div>
+    `;
   }
 
   getFaviconHtml(video) {
@@ -784,44 +780,131 @@ class Vibrary {
   bindVideoActions(container) {
     // Open video links
     container.querySelectorAll('.video-header').forEach(header => {
-      header.addEventListener('click', () => {
+      header.addEventListener('click', (e) => {
+        // Don't open link if clicking on thumbnail with preview
+        if (e.target.closest('.video-thumbnail.has-preview')) {
+          e.stopPropagation();
+          return;
+        }
+
         if (header.dataset.url) {
           window.open(header.dataset.url, '_blank');
         }
       });
     });
 
-    // HOVER PREVIEW FUNCTIONALITY
-    container.querySelectorAll('.video-thumbnail.has-preview').forEach(thumbnail => {
+    // ENHANCED HOVER PREVIEW FUNCTIONALITY
+    container.querySelectorAll('.video-thumbnail').forEach(thumbnail => {
       const videoId = thumbnail.dataset.videoId;
-      const video = this.getVideo(videoId);
+      if (!videoId) return;
 
-      if (video && video.thumbnailCollection && video.thumbnailCollection.length > 1) {
+      const video = this.getVideo(videoId);
+      if (!video) return;
+
+      // Check if we have multiple thumbnails
+      if (video.thumbnailCollection && video.thumbnailCollection.length > 1) {
+        // Add the has-preview class if not already present
+        thumbnail.classList.add('has-preview');
+
         let previewInterval = null;
         let currentIndex = 0;
         const img = thumbnail.querySelector('img');
+        if (!img) return;
+
         const originalSrc = img.src;
+        const thumbnails = video.thumbnailCollection;
 
-        thumbnail.addEventListener('mouseenter', () => {
-          console.log('🖼️ VIBRARY: Starting thumbnail preview for', video.title);
-
-          previewInterval = setInterval(() => {
-            currentIndex = (currentIndex + 1) % video.thumbnailCollection.length;
-            const currentThumbnail = video.thumbnailCollection[currentIndex];
-
-            if (currentThumbnail && currentThumbnail.thumbnail) {
-              img.src = currentThumbnail.thumbnail;
-            }
-          }, 800); // Change every 800ms
+        // Preload all thumbnails for smooth transition
+        const preloadedImages = [];
+        thumbnails.forEach((thumb, index) => {
+          if (thumb.thumbnail) {
+            const preloadImg = new Image();
+            preloadImg.src = thumb.thumbnail;
+            preloadedImages[index] = preloadImg;
+          }
         });
 
+        // Mouse enter - start preview
+        thumbnail.addEventListener('mouseenter', () => {
+          console.log(`🖼️ VIBRARY: Starting preview for "${video.title}" with ${thumbnails.length} frames`);
+
+          // Immediately show first alternate thumbnail
+          currentIndex = 1 % thumbnails.length;
+          if (thumbnails[currentIndex]?.thumbnail) {
+            img.src = thumbnails[currentIndex].thumbnail;
+          }
+
+          // Start cycling through thumbnails
+          previewInterval = setInterval(() => {
+            currentIndex = (currentIndex + 1) % thumbnails.length;
+            const currentThumb = thumbnails[currentIndex];
+
+            if (currentThumb?.thumbnail) {
+              img.src = currentThumb.thumbnail;
+
+              // Add time indicator
+              const timeIndicator = thumbnail.querySelector('.time-indicator') ||
+                  document.createElement('div');
+              timeIndicator.className = 'time-indicator';
+              timeIndicator.textContent = this.formatTime(currentThumb.time);
+              thumbnail.appendChild(timeIndicator);
+            }
+          }, 1000); // Change every second
+
+          // Add playing indicator
+          thumbnail.classList.add('previewing');
+        });
+
+        // Mouse leave - stop preview
         thumbnail.addEventListener('mouseleave', () => {
+          // Clear interval
           if (previewInterval) {
             clearInterval(previewInterval);
             previewInterval = null;
           }
-          img.src = originalSrc; // Reset to original
+
+          // Reset to original thumbnail
+          img.src = originalSrc;
           currentIndex = 0;
+
+          // Remove indicators
+          thumbnail.classList.remove('previewing');
+          const timeIndicator = thumbnail.querySelector('.time-indicator');
+          if (timeIndicator) {
+            timeIndicator.remove();
+          }
+
+          console.log('🖼️ VIBRARY: Stopped preview');
+        });
+
+        // Click to open video at specific time
+        thumbnail.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+
+          if (video.url) {
+            // Try to open at current preview time
+            const currentTime = thumbnails[currentIndex]?.time || 0;
+            let targetUrl = video.url;
+
+            // Add timestamp for YouTube
+            if (video.url.includes('youtube.com') || video.url.includes('youtu.be')) {
+              const separator = video.url.includes('?') ? '&' : '?';
+              targetUrl = `${video.url}${separator}t=${Math.floor(currentTime)}`;
+            }
+
+            window.open(targetUrl, '_blank');
+          }
+        });
+      } else {
+        // Single thumbnail - just make it clickable
+        thumbnail.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+
+          if (video.url) {
+            window.open(video.url, '_blank');
+          }
         });
       }
     });
@@ -842,7 +925,7 @@ class Vibrary {
       });
     });
 
-    // Remove buttons
+    // Remove buttons (from playlist)
     container.querySelectorAll('.remove-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -850,13 +933,22 @@ class Vibrary {
       });
     });
 
-    // Delete buttons
+    // Delete buttons (from history)
     container.querySelectorAll('.delete-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         this.deleteVideo(btn.dataset.videoId);
       });
     });
+  }
+
+  // Helper method to format time
+  formatTime(seconds) {
+    if (!seconds || seconds < 0) return '0:00';
+
+    const minutes = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
   }
 
   // Rating functionality
