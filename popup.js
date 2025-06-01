@@ -808,12 +808,22 @@ class Vibrary {
         const thumbnails = video.thumbnailCollection;
 
         // Mouse enter on entire video card
+        // In popup.js, update the bindVideoActions method hover preview section:
+
+// Mouse enter on entire video card
         videoItem.addEventListener('mouseenter', () => {
           console.log(`🖼️ VIBRARY: Starting preview for "${video.title}"`);
 
-          currentIndex = 1 % thumbnails.length;
+          // Start from FIRST thumbnail (index 0)
+          currentIndex = 0;
           if (thumbnails[currentIndex]?.thumbnail) {
             img.src = thumbnails[currentIndex].thumbnail;
+
+            // Show time indicator for first frame
+            const timeIndicator = document.createElement('div');
+            timeIndicator.className = 'time-indicator';
+            timeIndicator.textContent = this.formatTime(thumbnails[currentIndex].time);
+            thumbnail.appendChild(timeIndicator);
           }
 
           previewInterval = setInterval(() => {
@@ -823,26 +833,26 @@ class Vibrary {
             if (currentThumb?.thumbnail) {
               img.src = currentThumb.thumbnail;
 
-              const timeIndicator = thumbnail.querySelector('.time-indicator') ||
-                  document.createElement('div');
-              timeIndicator.className = 'time-indicator';
-              timeIndicator.textContent = this.formatTime(currentThumb.time);
-              thumbnail.appendChild(timeIndicator);
+              const timeIndicator = thumbnail.querySelector('.time-indicator');
+              if (timeIndicator) {
+                timeIndicator.textContent = this.formatTime(currentThumb.time);
+              }
             }
-          }, 1000);
+          }, 250);
 
           thumbnail.classList.add('previewing');
         });
 
-        // Mouse leave from entire video card
+// Mouse leave from entire video card
         videoItem.addEventListener('mouseleave', () => {
           if (previewInterval) {
             clearInterval(previewInterval);
             previewInterval = null;
           }
 
+          // Return to original (middle) thumbnail
           img.src = originalSrc;
-          currentIndex = 0;
+          currentIndex = 0; // Reset for next hover
 
           thumbnail.classList.remove('previewing');
           const timeIndicator = thumbnail.querySelector('.time-indicator');

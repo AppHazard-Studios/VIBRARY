@@ -1190,3 +1190,33 @@ textarea::placeholder {
     padding: 1px 4px;
   }
 }
+
+/* Fallback video styling */
+.video-item.fallback-video {
+  border-color: var(--warning);
+  opacity: 0.95;
+}
+
+.video-item.fallback-video:hover {
+  opacity: 1;
+  border-color: var(--warning);
+}
+
+.fallback-indicator {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 14px;
+  color: var(--warning);
+  cursor: help;
+  vertical-align: middle;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
