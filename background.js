@@ -1,175 +1,148 @@
-// VIBRARY Background Service Worker - Simplified
+// VIBRARY Background Service Worker - Dual Storage System
 class VibraryBackground {
   constructor() {
-    this.version = '2.6.0';
+    this.version = '3.0.0';
     this.init();
   }
 
   async init() {
-    console.log(`🎬 VIBRARY Background v${this.version} initialized`);
+    console.log(`🎬 VIBRARY v${this.version} initialized`);
 
-    // Handle installation/updates
+    // Handle installation
     chrome.runtime.onInstalled.addListener((details) => {
-      this.handleInstallation(details);
+      this.handleInstall(details);
     });
 
-    // Perform startup checks
-    await this.performStartupChecks();
+    // Check storage periodically
+    setInterval(() => this.checkStorage(), 60000); // Every minute
   }
 
-  async handleInstallation(details) {
-    console.log(`VIBRARY: ${details.reason} detected`);
+  async handleInstall(details) {
+    console.log(`VIBRARY: ${details.reason}`);
 
-    switch (details.reason) {
-      case 'install':
-        await this.performFreshInstall();
-        break;
-      case 'update':
-        await this.performUpdate(details.previousVersion);
-        break;
-    }
-  }
+    if (details.reason === 'install') {
+      // Fresh install with dual storage
+      await chrome.storage.local.set({
+        historyVideos: {},
+        libraryVideos: {},
+        playlists: {},
+        version: this.version
+      });
+      console.log('VIBRARY: Fresh install complete');
 
-  async performFreshInstall() {
-    console.log('VIBRARY: Setting up fresh installation');
-
-    const defaultData = {
-      historyVideos: {},
-      libraryVideos: {},
-      playlists: {},
-      blacklistEnabled: true,
-      blacklistedDomains: [],
-      autoCleanupInterval: 'off',
-      installDate: Date.now(),
-      version: this.version
-    };
-
-    await chrome.storage.local.set(defaultData);
-    console.log('VIBRARY: Fresh installation complete');
-  }
-
-  async performUpdate(previousVersion) {
-    console.log(`VIBRARY: Updating from v${previousVersion} to v${this.version}`);
-
-    try {
-      const result = await chrome.storage.local.get(null);
-
-      // Migrate from old single-storage system if needed
-      if (result.videos && !result.historyVideos) {
-        await this.migrateToNewArchitecture(result);
-      }
+    } else if (details.reason === 'update') {
+      // Migrate if needed
+      await this.migrate();
 
       // Update version
       await chrome.storage.local.set({ version: this.version });
-
-      console.log('VIBRARY: Update completed');
-    } catch (error) {
-      console.error('VIBRARY: Update failed:', error);
+      console.log('VIBRARY: Update complete');
     }
   }
 
-  async migrateToNewArchitecture(data) {
-    console.log('VIBRARY: Migrating to new storage architecture');
+  async migrate() {
+    const data = await chrome.storage.local.get(null);
 
-    const oldVideos = data.videos || {};
+    // If using single videos storage, migrate to dual
+    if (data.videos && !data.historyVideos) {
+      console.log('VIBRARY: Migrating from single to dual storage');
+
+      const videos = data.videos;
+      const playlists = data.playlists || {};
+
+      // Get all video IDs in playlists
+      const playlistVideoIds = new Set();
+      Object.values(playlists).forEach(videoIds => {
+        if (Array.isArray(videoIds)) {
+          videoIds.forEach(id => playlistVideoIds.add(id));
+        }
+      });
+
+      // Create dual storage
+      const historyVideos = {};
+      const libraryVideos = {};
+
+      for (const [id, video] of Object.entries(videos)) {
+        // All videos go to history
+        historyVideos[id] = video;
+
+        // Videos in playlists also go to library
+        if (playlistVideoIds.has(id)) {
+          libraryVideos[id] = { ...video };
+        }
+      }
+
+      // Save migrated data
+      await chrome.storage.local.set({
+        historyVideos,
+        libraryVideos,
+        playlists
+      });
+
+      // Remove old storage
+      await chrome.storage.local.remove(['videos']);
+
+      console.log(`VIBRARY: Migrated ${Object.keys(historyVideos).length} to history, ${Object.keys(libraryVideos).length} to library`);
+    }
+  }
+
+  async checkStorage() {
+    try {
+      const bytesUsed = await chrome.storage.local.getBytesInUse();
+      const maxBytes = chrome.storage.local.QUOTA_BYTES;
+      const percent = (bytesUsed / maxBytes * 100).toFixed(1);
+
+      if (percent > 80) {
+        console.warn(`VIBRARY: Storage at ${percent}% - consider cleanup`);
+
+        // Auto-cleanup old history items if needed
+        if (percent > 90) {
+          await this.autoCleanup();
+        }
+      }
+    } catch (e) {
+      // Ignore
+    }
+  }
+
+  async autoCleanup() {
+    console.log('VIBRARY: Running auto-cleanup');
+
+    const data = await chrome.storage.local.get(['historyVideos', 'libraryVideos', 'playlists']);
+    const historyVideos = data.historyVideos || {};
     const playlists = data.playlists || {};
 
-    // Get all video IDs that are in playlists
-    const playlistVideoIds = new Set();
+    // Get video IDs that are in playlists (these are safe)
+    const safeVideoIds = new Set();
     Object.values(playlists).forEach(videoIds => {
       if (Array.isArray(videoIds)) {
-        videoIds.forEach(id => playlistVideoIds.add(id));
+        videoIds.forEach(id => safeVideoIds.add(id));
       }
     });
 
-    // Split videos into history and library
-    const historyVideos = {};
-    const libraryVideos = {};
+    // Sort history videos by date
+    const historyEntries = Object.entries(historyVideos)
+        .sort(([, a], [, b]) => a.watchedAt - b.watchedAt);
 
-    for (const [videoId, video] of Object.entries(oldVideos)) {
-      // Skip deleted videos
-      if (video.deletedFromHistory) {
-        if (playlistVideoIds.has(videoId)) {
-          libraryVideos[videoId] = video;
-        }
-        continue;
-      }
+    // Remove oldest 25% that aren't in playlists
+    const toRemove = Math.floor(historyEntries.length * 0.25);
+    let removed = 0;
 
-      // Add to history
-      historyVideos[videoId] = video;
+    for (const [id, video] of historyEntries) {
+      if (removed >= toRemove) break;
 
-      // Also add to library if in playlists
-      if (playlistVideoIds.has(videoId)) {
-        libraryVideos[videoId] = { ...video };
+      if (!safeVideoIds.has(id)) {
+        delete historyVideos[id];
+        removed++;
       }
     }
 
-    // Save migrated data
-    await chrome.storage.local.set({
-      historyVideos,
-      libraryVideos,
-      playlists
-    });
-
-    // Remove old storage
-    await chrome.storage.local.remove(['videos']);
-
-    console.log(`VIBRARY: Migration complete - ${Object.keys(historyVideos).length} history, ${Object.keys(libraryVideos).length} library videos`);
-  }
-
-  async performStartupChecks() {
-    try {
-      // Verify storage integrity
-      const result = await chrome.storage.local.get(['historyVideos', 'libraryVideos', 'playlists']);
-
-      let needsSave = false;
-
-      // Ensure required fields exist
-      if (!result.historyVideos) {
-        result.historyVideos = {};
-        needsSave = true;
-      }
-
-      if (!result.libraryVideos) {
-        result.libraryVideos = {};
-        needsSave = true;
-      }
-
-      if (!result.playlists) {
-        result.playlists = {};
-        needsSave = true;
-      }
-
-      if (needsSave) {
-        await chrome.storage.local.set(result);
-      }
-
-      // Check storage size
-      await this.checkStorageHealth();
-
-    } catch (error) {
-      console.error('VIBRARY: Startup checks failed:', error);
-    }
-  }
-
-  async checkStorageHealth() {
-    try {
-      const bytesInUse = await chrome.storage.local.getBytesInUse();
-      const maxBytes = chrome.storage.local.QUOTA_BYTES;
-      const percentUsed = (bytesInUse / maxBytes * 100).toFixed(1);
-
-      console.log(`VIBRARY: Storage usage: ${percentUsed}% (${(bytesInUse / 1024 / 1024).toFixed(1)}MB used)`);
-
-      // Warn if getting full
-      if (percentUsed > 80) {
-        console.warn('VIBRARY: Storage usage is high. Consider cleaning up old videos.');
-      }
-
-    } catch (error) {
-      console.error('VIBRARY: Storage health check failed:', error);
+    if (removed > 0) {
+      await chrome.storage.local.set({ historyVideos });
+      console.log(`VIBRARY: Auto-cleaned ${removed} old history items`);
     }
   }
 }
 
-// Initialize background service
-const vibraryBackground = new VibraryBackground();
+// Start
+new VibraryBackground();
