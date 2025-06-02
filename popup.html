@@ -118,14 +118,14 @@
     <h3>Auto-Cleanup Settings</h3>
     <p>Automatically clear history videos (playlists are never affected):</p>
     <div class="cleanup-setting">
-      <label for="cleanup-interval">Clear history every:</label>
+      <label for="cleanup-interval">Clear history older than:</label>
       <select id="cleanup-interval" class="cleanup-select">
         <option value="off">Never (Off)</option>
-        <option value="1">Daily</option>
-        <option value="7">Weekly</option>
-        <option value="30">Monthly</option>
-        <option value="90">Every 3 Months</option>
-        <option value="365">Yearly</option>
+        <option value="1">1 Day</option>
+        <option value="7">7 Days</option>
+        <option value="30">30 Days</option>
+        <option value="90">90 Days</option>
+        <option value="365">365 Days</option>
       </select>
     </div>
     <div class="modal-actions">
@@ -142,7 +142,7 @@
     <p>Enter domains to block from history and playlists (one per line):</p>
     <textarea id="blacklist-textarea" rows="6" placeholder="example.com&#10;another-site.com&#10;last-site.org"></textarea>
     <div id="blacklist-toggle" class="blacklist-toggle">
-      <div class="blacklist-checkbox"></div>
+      <div id="blacklist-checkbox" class="blacklist-checkbox"></div>
       <span>Enable Blacklist</span>
     </div>
     <div class="modal-actions">

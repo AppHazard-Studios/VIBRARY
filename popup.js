@@ -1,9 +1,12 @@
-// VIBRARY Popup - With dual storage system
+// VIBRARY Popup - Final version with title editing
 class VibraryPopup {
   constructor() {
     this.historyVideos = {};
     this.libraryVideos = {};
     this.playlists = {};
+    this.blacklist = [];
+    this.blacklistEnabled = false;
+    this.cleanupInterval = 'off';
     this.currentTab = 'history';
     this.currentPlaylist = null;
 
@@ -23,17 +26,30 @@ class VibraryPopup {
   }
 
   async loadData() {
-    const data = await chrome.storage.local.get(['historyVideos', 'libraryVideos', 'playlists']);
+    const data = await chrome.storage.local.get([
+      'historyVideos',
+      'libraryVideos',
+      'playlists',
+      'blacklist',
+      'blacklistEnabled',
+      'cleanupInterval'
+    ]);
     this.historyVideos = data.historyVideos || {};
     this.libraryVideos = data.libraryVideos || {};
     this.playlists = data.playlists || {};
+    this.blacklist = data.blacklist || [];
+    this.blacklistEnabled = data.blacklistEnabled || false;
+    this.cleanupInterval = data.cleanupInterval || 'off';
   }
 
   async saveData() {
     await chrome.storage.local.set({
       historyVideos: this.historyVideos,
       libraryVideos: this.libraryVideos,
-      playlists: this.playlists
+      playlists: this.playlists,
+      blacklist: this.blacklist,
+      blacklistEnabled: this.blacklistEnabled,
+      cleanupInterval: this.cleanupInterval
     });
   }
 
@@ -73,10 +89,15 @@ class VibraryPopup {
     // New playlist
     document.getElementById('new-playlist')?.addEventListener('click', () => {
       const name = prompt('Playlist name:');
-      if (name && !this.playlists[name]) {
-        this.playlists[name] = [];
-        this.saveData();
-        this.render();
+      if (name) {
+        const trimmedName = name.trim();
+        if (trimmedName && !this.playlists[trimmedName]) {
+          this.playlists[trimmedName] = [];
+          this.saveData();
+          this.render();
+        } else if (this.playlists[trimmedName]) {
+          alert('A playlist with this name already exists');
+        }
       }
     });
 
@@ -95,27 +116,7 @@ class VibraryPopup {
     });
   }
 
-  render() {
-    // Hide all tabs
-    document.querySelectorAll('.tab-content').forEach(el => {
-      el.classList.remove('active');
-    });
-
-    if (this.currentTab === 'history') {
-      document.getElementById('history').classList.add('active');
-      this.renderHistory();
-    } else if (this.currentTab === 'library') {
-      if (this.currentPlaylist) {
-        document.getElementById('playlist-view').classList.add('active');
-        this.renderPlaylist();
-      } else {
-        document.getElementById('library').classList.add('active');
-        this.renderLibrary();
-      }
-    }
-  }
-
-  setupSettingsButton() {
+  setupSettingsMenu() {
     const settingsButton = document.getElementById('settings-button');
     const settingsMenu = document.getElementById('settings-menu');
 
@@ -144,17 +145,116 @@ class VibraryPopup {
           case 'import':
             this.showImportModal();
             break;
+          case 'auto-cleanup':
+            this.showAutoCleanupModal();
+            break;
+          case 'blacklist':
+            this.showBlacklistModal();
+            break;
         }
       });
     });
   }
 
-// Export functionality
+  // Auto-cleanup modal
+  showAutoCleanupModal() {
+    const modal = document.getElementById('auto-cleanup-modal');
+    const intervalSelect = document.getElementById('cleanup-interval');
+
+    // Set current value
+    intervalSelect.value = this.cleanupInterval;
+
+    // Save button
+    document.getElementById('cleanup-save-btn').onclick = async () => {
+      this.cleanupInterval = intervalSelect.value;
+      await chrome.storage.local.set({ cleanupInterval: this.cleanupInterval });
+
+      // Trigger immediate cleanup check
+      chrome.runtime.sendMessage({ action: 'checkCleanup' });
+
+      modal.classList.remove('active');
+      this.showNotification('Auto-cleanup settings saved');
+    };
+
+    // Cancel button
+    document.getElementById('cleanup-cancel-btn').onclick = () => {
+      modal.classList.remove('active');
+    };
+
+    modal.classList.add('active');
+  }
+
+  // Blacklist modal
+  showBlacklistModal() {
+    const modal = document.getElementById('blacklist-modal');
+    const textarea = document.getElementById('blacklist-textarea');
+    const checkbox = document.getElementById('blacklist-checkbox');
+    const toggle = document.getElementById('blacklist-toggle');
+
+    // Set current values
+    textarea.value = this.blacklist.join('\n');
+    checkbox.classList.toggle('checked', this.blacklistEnabled);
+
+    // Toggle click handler
+    toggle.onclick = () => {
+      checkbox.classList.toggle('checked');
+    };
+
+    // Save button
+    document.getElementById('blacklist-save-btn').onclick = async () => {
+      this.blacklist = textarea.value
+          .split('\n')
+          .map(domain => domain.trim().toLowerCase())
+          .filter(domain => domain.length > 0);
+
+      this.blacklistEnabled = checkbox.classList.contains('checked');
+
+      await chrome.storage.local.set({
+        blacklist: this.blacklist,
+        blacklistEnabled: this.blacklistEnabled
+      });
+
+      modal.classList.remove('active');
+      this.showNotification('Blacklist settings saved');
+    };
+
+    // Cancel button
+    document.getElementById('blacklist-cancel-btn').onclick = () => {
+      modal.classList.remove('active');
+    };
+
+    modal.classList.add('active');
+  }
+
+  render() {
+    // Hide all tabs
+    document.querySelectorAll('.tab-content').forEach(el => {
+      el.classList.remove('active');
+    });
+
+    if (this.currentTab === 'history') {
+      document.getElementById('history').classList.add('active');
+      this.renderHistory();
+    } else if (this.currentTab === 'library') {
+      if (this.currentPlaylist) {
+        document.getElementById('playlist-view').classList.add('active');
+        this.renderPlaylist();
+      } else {
+        document.getElementById('library').classList.add('active');
+        this.renderLibrary();
+      }
+    }
+  }
+
+  // Export functionality
   async exportData() {
     const exportData = {
       historyVideos: this.historyVideos,
       libraryVideos: this.libraryVideos,
       playlists: this.playlists,
+      blacklist: this.blacklist,
+      blacklistEnabled: this.blacklistEnabled,
+      cleanupInterval: this.cleanupInterval,
       exportDate: new Date().toISOString(),
       version: '3.0'
     };
@@ -172,7 +272,7 @@ class VibraryPopup {
     this.showNotification(`Exported ${totalVideos} videos`);
   }
 
-// Import functionality
+  // Import functionality
   showImportModal() {
     const modal = document.getElementById('import-modal');
     const fileInput = document.getElementById('import-file-input');
@@ -208,6 +308,15 @@ class VibraryPopup {
         }
         if (importData.playlists) {
           Object.assign(this.playlists, importData.playlists);
+        }
+        if (importData.blacklist) {
+          this.blacklist = importData.blacklist;
+        }
+        if (importData.blacklistEnabled !== undefined) {
+          this.blacklistEnabled = importData.blacklistEnabled;
+        }
+        if (importData.cleanupInterval) {
+          this.cleanupInterval = importData.cleanupInterval;
         }
 
         // Handle old format
@@ -248,22 +357,27 @@ class VibraryPopup {
     modal.classList.add('active');
   }
 
-// Notification helper
-  showNotification(message) {
+  // Notification helper with better styling
+  showNotification(message, type = 'success') {
+    // Remove any existing notifications
+    document.querySelectorAll('.vibrary-notification').forEach(n => n.remove());
+
     const notification = document.createElement('div');
+    notification.className = 'vibrary-notification';
     notification.style.cssText = `
-    position: fixed;
-    top: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--accent);
-    color: white;
-    padding: 12px 24px;
-    border-radius: 8px;
-    font-weight: 600;
-    z-index: 10000;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  `;
+      position: fixed;
+      top: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: ${type === 'success' ? 'var(--accent)' : 'var(--danger)'};
+      color: white;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-weight: 600;
+      z-index: 10001;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      animation: slideIn 0.3s ease-out;
+    `;
     notification.textContent = message;
 
     document.body.appendChild(notification);
@@ -394,8 +508,31 @@ class VibraryPopup {
       }
     }, { once: true });
 
-    // Set name
-    document.getElementById('playlist-name').textContent = this.currentPlaylist;
+    // Set name and make it editable
+    const playlistNameEl = document.getElementById('playlist-name');
+    playlistNameEl.textContent = this.currentPlaylist;
+
+    // Make playlist name editable
+    playlistNameEl.addEventListener('click', () => {
+      const newName = prompt('Rename playlist:', this.currentPlaylist);
+      if (newName && newName.trim() && newName !== this.currentPlaylist) {
+        const trimmedName = newName.trim();
+
+        // Check if new name already exists
+        if (this.playlists[trimmedName]) {
+          alert('A playlist with this name already exists');
+          return;
+        }
+
+        // Rename playlist
+        this.playlists[trimmedName] = this.playlists[this.currentPlaylist];
+        delete this.playlists[this.currentPlaylist];
+        this.currentPlaylist = trimmedName;
+
+        this.saveData();
+        this.render();
+      }
+    }, { once: true });
 
     // Get videos from library
     const videoIds = this.playlists[this.currentPlaylist] || [];
@@ -448,6 +585,7 @@ class VibraryPopup {
         </div>
         <div class="video-actions">
           <div class="video-rating">${rating || 'Unrated'}</div>
+          <button class="btn-small edit-btn" title="Edit title">✏️</button>
           <button class="btn-small rate-btn">Rate</button>
           <button class="btn-small playlist-btn">Playlist</button>
           ${options.showRemove ?
@@ -478,6 +616,15 @@ class VibraryPopup {
         if (url) {
           window.open(url, '_blank');
         }
+      });
+    });
+
+    // Edit title button
+    container.querySelectorAll('.edit-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const videoId = e.target.closest('.video-item').dataset.id;
+        this.editVideoTitle(videoId);
       });
     });
 
@@ -592,6 +739,28 @@ class VibraryPopup {
     });
   }
 
+  editVideoTitle(videoId) {
+    const video = this.getVideo(videoId);
+    if (!video) return;
+
+    const newTitle = prompt('Edit video title:', video.title);
+    if (newTitle && newTitle.trim() && newTitle !== video.title) {
+      const trimmedTitle = newTitle.trim();
+
+      // Update in both storages if exists
+      if (this.historyVideos[videoId]) {
+        this.historyVideos[videoId].title = trimmedTitle;
+      }
+      if (this.libraryVideos[videoId]) {
+        this.libraryVideos[videoId].title = trimmedTitle;
+      }
+
+      this.saveData();
+      this.render();
+      this.showNotification('Title updated');
+    }
+  }
+
   showRatingModal(videoId) {
     const video = this.getVideo(videoId);
     if (!video) return;
@@ -645,9 +814,19 @@ class VibraryPopup {
     // Create new playlist button
     document.getElementById('create-new-playlist').onclick = () => {
       const name = prompt('New playlist name:');
-      if (name && !this.playlists[name]) {
-        this.playlists[name] = [];
-        this.renderPlaylistOptions();
+      if (name) {
+        const trimmedName = name.trim();
+        if (trimmedName && !this.playlists[trimmedName]) {
+          this.playlists[trimmedName] = [];
+          this.renderPlaylistOptions();
+          // Auto-select the new playlist
+          const newOption = modal.querySelector(`[data-name="${this.escapeHtml(trimmedName)}"]`);
+          if (newOption) {
+            newOption.click();
+          }
+        } else if (this.playlists[trimmedName]) {
+          alert('A playlist with this name already exists');
+        }
       }
     };
 
@@ -724,163 +903,6 @@ class VibraryPopup {
     const div = document.createElement('div');
     div.textContent = text || '';
     return div.innerHTML;
-  }
-
-  setupSettingsMenu() {
-    const settingsButton = document.getElementById('settings-button');
-    const settingsMenu = document.getElementById('settings-menu');
-
-    if (settingsButton) {
-      settingsButton.addEventListener('click', (e) => {
-        e.stopPropagation();
-        settingsMenu.classList.toggle('active');
-      });
-    }
-
-    // Close menu when clicking outside
-    document.addEventListener('click', () => {
-      settingsMenu?.classList.remove('active');
-    });
-
-    // Handle menu items
-    document.querySelectorAll('.settings-menu-item').forEach(item => {
-      item.addEventListener('click', (e) => {
-        e.stopPropagation();
-        settingsMenu.classList.remove('active');
-
-        switch (item.dataset.action) {
-          case 'export':
-            this.exportData();
-            break;
-          case 'import':
-            this.showImportModal();
-            break;
-        }
-      });
-    });
-  }
-
-  async exportData() {
-    const exportData = {
-      historyVideos: this.historyVideos,
-      libraryVideos: this.libraryVideos,
-      playlists: this.playlists,
-      exportDate: new Date().toISOString(),
-      version: '3.0'
-    };
-
-    const dataStr = JSON.stringify(exportData, null, 2);
-    const blob = new Blob([dataStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `vibrary-backup-${new Date().toISOString().split('T')[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-
-    const totalVideos = Object.keys(this.historyVideos).length + Object.keys(this.libraryVideos).length;
-    this.showNotification(`Exported ${totalVideos} videos`);
-  }
-
-  showImportModal() {
-    const modal = document.getElementById('import-modal');
-    const fileInput = document.getElementById('import-file-input');
-
-    if (fileInput) {
-      fileInput.value = '';
-    }
-
-    // Setup import button
-    document.getElementById('import-confirm-btn').onclick = async () => {
-      const file = fileInput.files[0];
-      if (!file) {
-        alert('Please select a file');
-        return;
-      }
-
-      try {
-        const text = await file.text();
-        const importData = JSON.parse(text);
-
-        // Validate data
-        if (!importData.historyVideos && !importData.libraryVideos && !importData.videos) {
-          alert('Invalid backup file');
-          return;
-        }
-
-        // Merge data
-        if (importData.historyVideos) {
-          Object.assign(this.historyVideos, importData.historyVideos);
-        }
-        if (importData.libraryVideos) {
-          Object.assign(this.libraryVideos, importData.libraryVideos);
-        }
-        if (importData.playlists) {
-          Object.assign(this.playlists, importData.playlists);
-        }
-
-        // Handle old format
-        if (importData.videos && !importData.historyVideos) {
-          // Old single storage format
-          Object.assign(this.historyVideos, importData.videos);
-
-          // Add playlist videos to library
-          const playlistVideoIds = new Set();
-          Object.values(this.playlists).forEach(ids => {
-            ids.forEach(id => playlistVideoIds.add(id));
-          });
-
-          playlistVideoIds.forEach(id => {
-            if (this.historyVideos[id] && !this.libraryVideos[id]) {
-              this.libraryVideos[id] = { ...this.historyVideos[id] };
-            }
-          });
-        }
-
-        await this.saveData();
-        modal.classList.remove('active');
-        this.render();
-
-        const total = Object.keys(this.historyVideos).length;
-        this.showNotification(`Imported ${total} videos`);
-
-      } catch (error) {
-        alert('Failed to import: ' + error.message);
-      }
-    };
-
-    // Cancel button
-    document.getElementById('import-cancel-btn').onclick = () => {
-      modal.classList.remove('active');
-    };
-
-    modal.classList.add('active');
-  }
-
-  showNotification(message) {
-    const notification = document.createElement('div');
-    notification.style.cssText = `
-      position: fixed;
-      top: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      background: var(--accent);
-      color: white;
-      padding: 12px 24px;
-      border-radius: 8px;
-      font-weight: 600;
-      z-index: 10000;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    `;
-    notification.textContent = message;
-
-    document.body.appendChild(notification);
-
-    setTimeout(() => {
-      notification.style.opacity = '0';
-      notification.style.transform = 'translateX(-50%) translateY(-10px)';
-      setTimeout(() => notification.remove(), 300);
-    }, 2000);
   }
 }
 

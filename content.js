@@ -1,22 +1,61 @@
-// VIBRARY Content Script - Improved with your feedback
+// VIBRARY Content Script - Final polished version
 class VideoDetector {
   constructor() {
     this.currentVideo = null;
     this.lastProcessedVideo = null;
-    this.captureSession = null;
-    this.watchingCapture = null;
+    this.activeSessions = new Map(); // Track multiple video sessions
+    this.blacklist = [];
+    this.blacklistEnabled = false;
+    this.captureRetries = new Map(); // Track capture retry attempts
 
     this.init();
   }
 
-  init() {
+  async init() {
     console.log('🎬 VIBRARY: Video detector started');
+
+    // Load blacklist settings
+    await this.loadBlacklist();
 
     // Listen for media session changes
     this.watchMediaSession();
 
     // Also watch for playing videos
     this.watchVideoElements();
+
+    // Clean up old sessions periodically
+    setInterval(() => this.cleanupOldSessions(), 30000);
+  }
+
+  async loadBlacklist() {
+    try {
+      const data = await chrome.storage.local.get(['blacklist', 'blacklistEnabled']);
+      this.blacklist = data.blacklist || [];
+      this.blacklistEnabled = data.blacklistEnabled || false;
+    } catch (e) {
+      console.error('Failed to load blacklist:', e);
+    }
+
+    // Listen for blacklist changes
+    chrome.storage.onChanged.addListener((changes) => {
+      if (changes.blacklist || changes.blacklistEnabled) {
+        this.loadBlacklist();
+      }
+    });
+  }
+
+  isBlacklisted(url) {
+    if (!this.blacklistEnabled || this.blacklist.length === 0) return false;
+
+    try {
+      const hostname = new URL(url).hostname.toLowerCase();
+      return this.blacklist.some(domain => {
+        const d = domain.toLowerCase();
+        return hostname === d || hostname.endsWith('.' + d);
+      });
+    } catch (e) {
+      return false;
+    }
   }
 
   watchMediaSession() {
@@ -28,16 +67,22 @@ class VideoDetector {
       if (!metadata) return;
 
       const title = metadata.title;
-      const url = window.location.href;
+      const pageUrl = window.location.href; // Always use page URL, not video src
       const now = Date.now();
 
       // Skip if nothing changed or too recent
-      if (title === lastCheck.title && url === lastCheck.url) return;
+      if (title === lastCheck.title && pageUrl === lastCheck.url) return;
       if (now - lastCheck.time < 3000) return; // 3 second cooldown
+
+      // Skip if blacklisted
+      if (this.isBlacklisted(pageUrl)) {
+        console.log('⏭️ Skipping blacklisted site');
+        return;
+      }
 
       // Skip if URL is just the domain (like youtube.com)
       try {
-        const urlObj = new URL(url);
+        const urlObj = new URL(pageUrl);
         if (urlObj.pathname === '/' && !urlObj.search) {
           console.log('⏭️ Skipping homepage detection');
           return;
@@ -46,16 +91,16 @@ class VideoDetector {
 
       console.log('📀 Media Session detected:', title);
 
-      lastCheck = { title, url, time: now };
+      lastCheck = { title, url: pageUrl, time: now };
 
-      // Create video data
+      // Create video data with page URL
       const videoData = {
         id: `vid_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         title: title,
         artist: metadata.artist || '',
         album: metadata.album || '',
-        url: url,
-        website: this.getWebsiteName(url),
+        url: pageUrl, // Use page URL, not video src
+        website: this.getWebsiteName(pageUrl),
         favicon: this.getFavicon(),
         thumbnail: metadata.artwork?.[0]?.src || '',
         watchedAt: Date.now(),
@@ -65,11 +110,11 @@ class VideoDetector {
       // Save it
       this.saveVideo(videoData);
 
-      // Try to capture thumbnails from video element
+      // Try to start watch-based capture for video element
       setTimeout(() => {
         const video = this.findMainVideo();
         if (video && video.duration > 5) {
-          this.handleThumbnailCapture(video, videoData.id);
+          this.startWatchCapture(video, videoData.id);
         }
       }, 1000);
     }, 2000);
@@ -90,38 +135,121 @@ class VideoDetector {
         }, 3000);
       }
     }, true);
+
+    // Also watch for video source changes
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach(mutation => {
+        if (mutation.type === 'attributes' &&
+            mutation.target.tagName === 'VIDEO' &&
+            (mutation.attributeName === 'src' || mutation.attributeName === 'currentSrc')) {
+          // Video source changed, wait and check if we need to update
+          setTimeout(() => {
+            const video = mutation.target;
+            if (!video.paused && video.duration > 5) {
+              this.handleVideoSourceChange(video);
+            }
+          }, 1000);
+        }
+      });
+    });
+
+    // Observe all video elements
+    document.addEventListener('DOMContentLoaded', () => {
+      document.querySelectorAll('video').forEach(video => {
+        observer.observe(video, { attributes: true });
+      });
+    });
+
+    // Watch for new video elements
+    const videoObserver = new MutationObserver((mutations) => {
+      mutations.forEach(mutation => {
+        mutation.addedNodes.forEach(node => {
+          if (node.tagName === 'VIDEO') {
+            observer.observe(node, { attributes: true });
+          }
+        });
+      });
+    });
+
+    videoObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  handleVideoSourceChange(video) {
+    // Check if this is a new video
+    const pageUrl = window.location.href;
+    const title = document.title.replace(/^\(\d+\)\s*/, '').trim();
+
+    // Find and cancel any existing session for this video element
+    for (const [sessionId, session] of this.activeSessions) {
+      if (session.video === video) {
+        session.cancelled = true;
+        this.activeSessions.delete(sessionId);
+        break;
+      }
+    }
+
+    // Start fresh detection
+    if (!navigator.mediaSession?.metadata?.title) {
+      this.handleVideoWithoutMediaSession(video);
+    }
   }
 
   handleVideoWithoutMediaSession(video) {
     // Skip if too small or too short
     if (video.duration < 5 || video.offsetWidth < 200) return;
 
-    const url = window.location.href;
+    const pageUrl = window.location.href; // Always use page URL
     const title = document.title.replace(/^\(\d+\)\s*/, '').trim();
+
+    // Skip if blacklisted
+    if (this.isBlacklisted(pageUrl)) {
+      console.log('⏭️ Skipping blacklisted site');
+      return;
+    }
 
     // Skip homepages
     try {
-      const urlObj = new URL(url);
+      const urlObj = new URL(pageUrl);
       if (urlObj.pathname === '/' && !urlObj.search) return;
     } catch (e) {}
 
-    // Check if we already saved this recently
-    if (this.lastProcessedVideo &&
+    // More robust duplicate check
+    const isDuplicate = this.lastProcessedVideo &&
         this.lastProcessedVideo.title === title &&
-        this.lastProcessedVideo.url === url &&
-        Date.now() - this.lastProcessedVideo.time < 10000) {
+        this.lastProcessedVideo.url === pageUrl &&
+        Date.now() - this.lastProcessedVideo.time < 10000;
+
+    if (isDuplicate) {
+      // But still update capture if video element changed
+      const existingSession = Array.from(this.activeSessions.values())
+          .find(s => s.video === video && !s.cancelled);
+
+      if (!existingSession) {
+        // Find the video ID and start capture
+        setTimeout(async () => {
+          const data = await chrome.storage.local.get(['historyVideos']);
+          const historyVideos = data.historyVideos || {};
+
+          const recentVideo = Object.entries(historyVideos)
+              .find(([id, v]) => v.url === pageUrl && Date.now() - v.watchedAt < 30000);
+
+          if (recentVideo) {
+            this.startWatchCapture(video, recentVideo[0]);
+          }
+        }, 500);
+      }
       return;
     }
 
     console.log('🎥 Video without media session:', title);
 
-    this.lastProcessedVideo = { title, url, time: Date.now() };
+    this.lastProcessedVideo = { title, url: pageUrl, time: Date.now() };
 
     const videoData = {
       id: `vid_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       title: title,
-      url: url,
-      website: this.getWebsiteName(url),
+      url: pageUrl, // Use page URL
+      website: this.getWebsiteName(pageUrl),
       favicon: this.getFavicon(),
       thumbnail: '', // Will be set by thumbnail capture
       watchedAt: Date.now(),
@@ -129,8 +257,8 @@ class VideoDetector {
       noMediaSession: true
     };
 
-    // Capture thumbnails
-    this.handleThumbnailCapture(video, videoData.id);
+    // Start watch-based capture
+    this.startWatchCapture(video, videoData.id);
 
     // Save after a delay to get first thumbnail
     setTimeout(() => {
@@ -148,7 +276,14 @@ class VideoDetector {
         'youtu.be': 'YouTube',
         'vimeo.com': 'Vimeo',
         'twitch.tv': 'Twitch',
-        'netflix.com': 'Netflix'
+        'netflix.com': 'Netflix',
+        'dailymotion.com': 'Dailymotion',
+        'facebook.com': 'Facebook',
+        'instagram.com': 'Instagram',
+        'twitter.com': 'Twitter',
+        'x.com': 'X (Twitter)',
+        'reddit.com': 'Reddit',
+        'tiktok.com': 'TikTok'
       };
 
       if (knownSites[hostname]) {
@@ -168,13 +303,18 @@ class VideoDetector {
     const selectors = [
       'link[rel="icon"]',
       'link[rel="shortcut icon"]',
-      'link[rel="apple-touch-icon"]'
+      'link[rel="apple-touch-icon"]',
+      'link[rel="apple-touch-icon-precomposed"]'
     ];
 
     for (const selector of selectors) {
       const icon = document.querySelector(selector);
       if (icon?.href) return icon.href;
     }
+
+    // Try meta property for Open Graph
+    const ogImage = document.querySelector('meta[property="og:image"]');
+    if (ogImage?.content) return ogImage.content;
 
     return `${window.location.origin}/favicon.ico`;
   }
@@ -188,212 +328,278 @@ class VideoDetector {
         .sort((a, b) => (b.offsetWidth * b.offsetHeight) - (a.offsetWidth * a.offsetHeight))[0];
   }
 
-  handleThumbnailCapture(video, videoId) {
-    const duration = video.duration;
-
-    // For short videos (3 minutes or less), capture as they watch
-    if (duration <= 180) {
-      console.log('📸 Starting watch-based capture for short video');
-      this.startWatchCapture(video, videoId);
-    } else {
-      // For longer videos, do quick capture with pause
-      console.log('📸 Starting quick capture for long video');
-      this.startQuickCapture(video, videoId);
-    }
-  }
-
   startWatchCapture(video, videoId) {
-    // Cancel any existing capture
-    if (this.watchingCapture) {
-      this.watchingCapture.cancelled = true;
+    // Cancel any existing capture for this video
+    for (const [sessionId, session] of this.activeSessions) {
+      if (session.video === video) {
+        session.cancelled = true;
+        this.activeSessions.delete(sessionId);
+        break;
+      }
     }
 
     const session = {
+      id: videoId,
       video: video,
       videoId: videoId,
       thumbnails: [],
-      lastCaptureTime: -1,
-      cancelled: false
+      lastCaptureTime: -30, // Start capturing immediately
+      captureInterval: 15, // Capture every 15 seconds initially
+      cancelled: false,
+      lastPlayTime: video.currentTime,
+      startTime: Date.now(),
+      failedAttempts: 0,
+      lastSeekTime: video.currentTime
     };
 
-    this.watchingCapture = session;
+    this.activeSessions.set(videoId, session);
 
-    // Capture every 10-20 seconds of playback
-    const captureInterval = Math.min(20, video.duration / 10);
+    console.log(`📸 Starting watch-based capture for ${videoId}`);
+
+    // Adjust capture interval based on video length
+    if (video.duration < 60) {
+      session.captureInterval = 10; // Every 10 seconds for short videos
+    } else if (video.duration < 300) {
+      session.captureInterval = 15; // Every 15 seconds for medium videos
+    } else {
+      session.captureInterval = 30; // Every 30 seconds for long videos
+    }
+
+    // Listen for seeking to handle skip forward
+    const seekHandler = () => {
+      session.lastSeekTime = video.currentTime;
+      session.lastCaptureTime = video.currentTime - session.captureInterval - 1; // Force capture soon
+    };
+    video.addEventListener('seeked', seekHandler);
 
     const checkCapture = () => {
-      if (session.cancelled || video.paused) return;
+      if (session.cancelled || !this.activeSessions.has(videoId)) return;
 
-      const currentTime = video.currentTime;
+      try {
+        // Check if video is still on page and valid
+        if (!document.contains(video)) {
+          this.finalizeCapture(session);
+          return;
+        }
 
-      // Capture if we've moved forward enough
-      if (currentTime - session.lastCaptureTime >= captureInterval) {
-        this.captureCurrentFrame(video).then(thumbnail => {
-          if (thumbnail && !session.cancelled) {
-            session.thumbnails.push({
-              time: currentTime,
-              thumbnail: thumbnail
-            });
-
-            session.lastCaptureTime = currentTime;
-
-            // Update storage
-            if (session.thumbnails.length === 5) {
-              // Use middle as primary
-              this.updateThumbnail(videoId, thumbnail, session.thumbnails);
-            }
-
-            console.log(`📸 Captured at ${currentTime.toFixed(1)}s (watching)`);
+        // If paused for more than 30 seconds, finalize
+        if (video.paused && Date.now() - session.startTime > 30000) {
+          if (session.thumbnails.length > 0) {
+            this.finalizeCapture(session);
           }
-        });
-      }
+          return;
+        }
 
-      // Continue checking
-      if (!session.cancelled && session.thumbnails.length < 10) {
+        const currentTime = video.currentTime;
+
+        // Only capture if playing and moved forward or seeking
+        if (!video.paused || Math.abs(currentTime - session.lastSeekTime) > 1) {
+          // Update play time if moved forward
+          if (currentTime > session.lastPlayTime || Math.abs(currentTime - session.lastSeekTime) < 2) {
+            session.lastPlayTime = currentTime;
+
+            // Capture if enough time has passed
+            if (currentTime - session.lastCaptureTime >= session.captureInterval ||
+                session.thumbnails.length === 0) {
+
+              this.captureWithRetry(video, session).then(thumbnail => {
+                if (thumbnail && !session.cancelled) {
+                  session.thumbnails.push({
+                    time: currentTime,
+                    thumbnail: thumbnail
+                  });
+
+                  session.lastCaptureTime = currentTime;
+                  session.failedAttempts = 0; // Reset failed attempts on success
+
+                  // Keep only the last 10 thumbnails
+                  if (session.thumbnails.length > 10) {
+                    session.thumbnails = session.thumbnails.slice(-10);
+                  }
+
+                  // Update storage with current thumbnails
+                  this.updateThumbnail(videoId, thumbnail, session.thumbnails);
+
+                  console.log(`📸 Captured at ${currentTime.toFixed(1)}s (${session.thumbnails.length} total)`);
+                }
+              });
+            }
+          }
+        }
+
+        // Continue checking
         requestAnimationFrame(checkCapture);
-      } else if (session.thumbnails.length > 0) {
-        // Final update
-        const middle = session.thumbnails[Math.floor(session.thumbnails.length / 2)];
-        this.updateThumbnail(videoId, middle.thumbnail, session.thumbnails);
+
+      } catch (e) {
+        console.error('Capture check error:', e);
+        if (session.thumbnails.length > 0) {
+          this.finalizeCapture(session);
+        }
       }
     };
 
     // Start checking
-    checkCapture();
+    requestAnimationFrame(checkCapture);
+
+    // Also listen for video end
+    video.addEventListener('ended', () => {
+      video.removeEventListener('seeked', seekHandler);
+      setTimeout(() => this.finalizeCapture(session), 1000);
+    }, { once: true });
+
+    // Clean up on page unload
+    window.addEventListener('beforeunload', () => {
+      video.removeEventListener('seeked', seekHandler);
+      if (session.thumbnails.length > 0) {
+        this.finalizeCapture(session);
+      }
+    }, { once: true });
   }
 
-  async startQuickCapture(video, videoId) {
-    // Cancel any existing capture
-    if (this.captureSession) {
-      this.captureSession.cancelled = true;
-    }
-
-    const session = {
-      video: video,
-      videoId: videoId,
-      thumbnails: [],
-      cancelled: false
-    };
-
-    this.captureSession = session;
-
-    // Remember playback state
-    const wasPlaying = !video.paused;
-    const startTime = video.currentTime;
-
-    // Pause if playing
-    if (wasPlaying) {
-      video.pause();
-      await new Promise(r => setTimeout(r, 100));
-    }
-
-    // Calculate capture points
-    const count = 10;
-    const interval = video.duration / count;
-    const capturePoints = [];
-
-    for (let i = 0; i < count; i++) {
-      capturePoints.push(i * interval);
-    }
-
-    console.log('📸 Quick capturing at', count, 'points');
-
-    // Capture frames quickly
-    for (let i = 0; i < capturePoints.length && !session.cancelled; i++) {
-      const targetTime = capturePoints[i];
-
-      try {
-        // Set time
-        video.currentTime = targetTime;
-
-        // Wait for seek with timeout
-        await new Promise((resolve) => {
-          let resolved = false;
-
-          const onSeeked = () => {
-            if (!resolved) {
-              resolved = true;
-              resolve();
-            }
-          };
-
-          video.addEventListener('seeked', onSeeked, { once: true });
-
-          // Timeout after 1 second
-          setTimeout(() => {
-            if (!resolved) {
-              resolved = true;
-              video.removeEventListener('seeked', onSeeked);
-              resolve();
-            }
-          }, 1000);
-        });
-
-        // Small delay for frame to render
-        await new Promise(r => setTimeout(r, 100));
-
-        // Capture frame
-        const thumbnail = await this.captureCurrentFrame(video);
-        if (thumbnail) {
-          session.thumbnails.push({
-            time: targetTime,
-            thumbnail: thumbnail
-          });
-
-          console.log(`📸 Captured ${i + 1}/${count}`);
-
-          // Update primary thumbnail at middle
-          if (i === Math.floor(count / 2)) {
-            this.updateThumbnail(videoId, thumbnail, session.thumbnails);
-          }
-        }
-
-      } catch (error) {
-        console.warn('Capture error:', error);
+  async captureWithRetry(video, session, attempt = 0) {
+    try {
+      const thumbnail = await this.captureCurrentFrame(video);
+      if (thumbnail) {
+        return thumbnail;
       }
-    }
 
-    // Restore playback
-    video.currentTime = startTime;
-    if (wasPlaying) {
-      video.play();
-    }
+      // If capture returned null but no error, try once more
+      if (attempt === 0) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        return this.captureWithRetry(video, session, 1);
+      }
 
-    // Final update
-    if (session.thumbnails.length > 0) {
-      const middle = session.thumbnails[Math.floor(session.thumbnails.length / 2)];
-      this.updateThumbnail(videoId, middle.thumbnail, session.thumbnails);
-      console.log(`📸 Completed with ${session.thumbnails.length} thumbnails`);
+      return null;
+    } catch (error) {
+      session.failedAttempts++;
+
+      // Only log first security error to reduce noise
+      if (session.failedAttempts === 1 && error.name === 'SecurityError') {
+        console.log('📸 Cross-origin video detected, capture may be limited');
+      } else if (session.failedAttempts === 1 && error.name !== 'SecurityError') {
+        console.warn('Capture attempt failed:', error.name);
+      }
+
+      // Keep trying for a bit in case it's temporary
+      if (session.failedAttempts < 5) {
+        return null;
+      }
+
+      // Give up after too many failures
+      if (session.failedAttempts === 5) {
+        console.log('📸 Unable to capture thumbnails for this video');
+      }
+
+      return null;
     }
   }
 
   captureCurrentFrame(video) {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       try {
+        // Check if video is ready
         if (video.readyState < 2) {
           resolve(null);
           return;
         }
 
+        // Check for cross-origin restrictions silently
+        if (video.crossOrigin !== 'anonymous' && video.src && !video.src.startsWith(window.location.origin)) {
+          // Try a quick test draw
+          try {
+            const testCanvas = document.createElement('canvas');
+            const testCtx = testCanvas.getContext('2d');
+            testCanvas.width = 1;
+            testCanvas.height = 1;
+            testCtx.drawImage(video, 0, 0, 1, 1);
+            // If we get here, we can capture
+          } catch (e) {
+            // Expected for cross-origin videos
+            resolve(null);
+            return;
+          }
+        }
+
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
 
-        // Set size
+        // Set size - max 400px wide
         const scale = Math.min(1, 400 / video.videoWidth);
-        canvas.width = video.videoWidth * scale;
-        canvas.height = video.videoHeight * scale;
+        canvas.width = Math.floor(video.videoWidth * scale);
+        canvas.height = Math.floor(video.videoHeight * scale);
 
-        // Draw frame
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        // Try to draw frame
+        try {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        } catch (drawError) {
+          // Don't log security errors - they're expected for cross-origin
+          if (drawError.name !== 'SecurityError') {
+            console.warn('Draw error:', drawError.name);
+          }
+          resolve(null);
+          return;
+        }
 
-        // Convert to data URL
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
-        resolve(dataUrl);
+        // Check if the canvas is actually painted
+        const imageData = ctx.getImageData(0, 0, 1, 1);
+        if (imageData.data[3] === 0) {
+          // Fully transparent, likely failed
+          resolve(null);
+          return;
+        }
+
+        // Convert to data URL with compression
+        canvas.toBlob(
+            (blob) => {
+              if (blob) {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result);
+                reader.readAsDataURL(blob);
+              } else {
+                resolve(null);
+              }
+            },
+            'image/jpeg',
+            0.7
+        );
 
       } catch (e) {
+        // Don't log security errors - they're expected
+        if (e.name !== 'SecurityError') {
+          console.warn('Capture error:', e.name);
+        }
         resolve(null);
       }
     });
+  }
+
+  finalizeCapture(session) {
+    if (session.cancelled || session.thumbnails.length === 0) return;
+
+    session.cancelled = true;
+    this.activeSessions.delete(session.id);
+
+    // Use middle thumbnail as primary, or last one if fewer than 3
+    const primaryIndex = session.thumbnails.length < 3 ?
+        session.thumbnails.length - 1 :
+        Math.floor(session.thumbnails.length / 2);
+    const primary = session.thumbnails[primaryIndex];
+
+    this.updateThumbnail(session.videoId, primary.thumbnail, session.thumbnails);
+    console.log(`📸 Finalized capture with ${session.thumbnails.length} thumbnails`);
+  }
+
+  cleanupOldSessions() {
+    // Remove sessions older than 5 minutes
+    const fiveMinutesAgo = Date.now() - 300000;
+
+    for (const [sessionId, session] of this.activeSessions) {
+      if (session.startTime < fiveMinutesAgo || !document.contains(session.video)) {
+        session.cancelled = true;
+        this.activeSessions.delete(sessionId);
+        console.log(`🧹 Cleaned up old session: ${sessionId}`);
+      }
+    }
   }
 
   async updateThumbnail(videoId, thumbnail, collection) {
@@ -404,35 +610,63 @@ class VideoDetector {
 
       // Update in history
       let found = false;
-      for (const [id, video] of Object.entries(historyVideos)) {
-        if (id === videoId ||
-            (video.url === window.location.href &&
-                Date.now() - video.watchedAt < 60000)) {
-          historyVideos[id] = {
-            ...video,
+
+      // First try exact ID match
+      if (historyVideos[videoId]) {
+        historyVideos[videoId] = {
+          ...historyVideos[videoId],
+          thumbnail: thumbnail,
+          thumbnailCollection: collection
+        };
+        found = true;
+
+        // Also update in library if it exists there
+        if (libraryVideos[videoId]) {
+          libraryVideos[videoId] = {
+            ...libraryVideos[videoId],
             thumbnail: thumbnail,
             thumbnailCollection: collection
           };
-          found = true;
-
-          // Also update in library if it exists there
-          if (libraryVideos[id]) {
-            libraryVideos[id] = {
-              ...libraryVideos[id],
+        }
+      } else {
+        // Fallback: find by URL and recent time
+        for (const [id, video] of Object.entries(historyVideos)) {
+          if (video.url === window.location.href &&
+              Date.now() - video.watchedAt < 60000) {
+            historyVideos[id] = {
+              ...video,
               thumbnail: thumbnail,
               thumbnailCollection: collection
             };
+            found = true;
+
+            // Also update in library if it exists there
+            if (libraryVideos[id]) {
+              libraryVideos[id] = {
+                ...libraryVideos[id],
+                thumbnail: thumbnail,
+                thumbnailCollection: collection
+              };
+            }
+            break;
           }
-          break;
         }
       }
 
       if (found) {
         await chrome.storage.local.set({ historyVideos, libraryVideos });
-        console.log('✅ Updated thumbnails');
       }
     } catch (e) {
-      console.error('Failed to update thumbnail:', e);
+      if (e.message?.includes('Extension context invalidated')) {
+        console.log('Extension context invalidated - stopping capture');
+        // Cancel all active sessions
+        for (const session of this.activeSessions.values()) {
+          session.cancelled = true;
+        }
+        this.activeSessions.clear();
+      } else {
+        console.error('Failed to update thumbnail:', e);
+      }
     }
   }
 
@@ -441,12 +675,17 @@ class VideoDetector {
       const data = await chrome.storage.local.get(['historyVideos']);
       const historyVideos = data.historyVideos || {};
 
-      // Check for duplicate (same URL and title within 5 minutes)
-      const duplicate = Object.values(historyVideos).find(v =>
-          v.url === videoData.url &&
-          v.title === videoData.title &&
-          Date.now() - v.watchedAt < 300000
-      );
+      // More robust duplicate check
+      const duplicate = Object.values(historyVideos).find(v => {
+        // Same URL and title
+        if (v.url === videoData.url && v.title === videoData.title) {
+          // Within 5 minutes
+          if (Date.now() - v.watchedAt < 300000) {
+            return true;
+          }
+        }
+        return false;
+      });
 
       if (duplicate) {
         console.log('⏭️ Skipping duplicate');
@@ -459,7 +698,11 @@ class VideoDetector {
 
       console.log('✅ Saved to history:', videoData.title);
     } catch (e) {
-      console.error('Failed to save:', e);
+      if (e.message?.includes('Extension context invalidated')) {
+        console.log('Extension context invalidated - cannot save');
+      } else {
+        console.error('Failed to save:', e);
+      }
     }
   }
 }

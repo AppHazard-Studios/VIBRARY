@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VIBRARY",
-  "version": "2.6.0",
+  "version": "3.1.0",
   "description": "Production-quality video tracking across the web with enhanced detection, smart thumbnails, playlists, ratings, and privacy-first design",
   "author": "AppHazard Studios",
   "permissions": [
