@@ -20,7 +20,7 @@
 
 It lets you keep track of videos you watch, rate them, and organize them into playlists — all without using browser history, cookies, or platform accounts.
 
-It works on **any site that supports Picture-in-Picture** or Chrome's **Now Playing (Media Session)** feature.
+It works on **any site that supports Chrome's Media Session API** or has detectable video elements.
 
 ---
 
@@ -51,12 +51,6 @@ It works on **any site that supports Picture-in-Picture** or Chrome's **Now Play
    - Enable **Developer Mode**
    - Click **Load unpacked** and select the unzipped folder
 
-### From Source
-1. Clone this repository
-2. Open `chrome://extensions/` in your browser
-3. Enable **Developer Mode**
-4. Click **Load unpacked** and select the repository folder
-
 ---
 
 ## 🚀 How It Works
@@ -64,11 +58,10 @@ It works on **any site that supports Picture-in-Picture** or Chrome's **Now Play
 ### Video Detection
 VIBRARY uses two methods to detect videos:
 1. **Media Session API** - Captures metadata like title, artist, and thumbnail from sites that support it
-2. **Direct video element detection** - Falls back to page title and captures thumbnails directly for other sites
+2. **Direct video element detection** - Listens for playing video elements as a fallback
 
 ### Duplicate Prevention
 - Videos are identified by their page URL
-- If you watch the same video within 30 seconds, it won't create a duplicate
 - If the title changed (e.g., you edited it), the existing entry is updated
 
 ### Thumbnail Capture
@@ -113,6 +106,7 @@ Each video entry contains:
 - Set in Settings → Auto-Cleanup
 - Options: Off, 1 day, 7 days, 30 days, 90 days, 365 days
 - Only removes videos from history that aren't in any playlist
+- Videos in playlists remain in both the playlist and library storage
 - Runs hourly when enabled
 
 ### Blacklist
@@ -144,28 +138,31 @@ Each video entry contains:
 ### Incognito Mode
 - Works in incognito with extension allowed
 - Data still saved locally (not tied to incognito session)
+- Persists across browser restarts
 
 ---
 
 ## 💡 Tips & Tricks
 
-### Keyboard Shortcuts
-- Click video title to open in new tab
-- Click thumbnail to open video directly
+### Navigation
+- Click video title or thumbnail to open in new tab
+- Search by title or website name
+- Sort by date (recent first) or rating
+- Filter by star rating or unrated videos
 
 ### Managing Large Libraries
 - Use search to filter by title or website
-- Sort by date (recent first) or rating
+- Sort by date, rating, or website
 - Filter by star rating or unrated videos
 
 ### Thumbnail Quality
 - Some sites block thumbnail capture (CORS policy)
-- Thumbnail capture works best on sites you're logged into
+- Thumbnail capture may be limited on cross-origin videos
 - Preview shows multiple frames captured during viewing
 
 ### URL Handling
 - Always saves the page URL, not the video file URL
-- Handles YouTube, Vimeo, Dailymotion, and most video sites
+- Handles YouTube, Vimeo, and most video sites with Media Session support
 - Works with embedded videos that use Media Session API
 
 ---
@@ -175,7 +172,6 @@ Each video entry contains:
 1. **Thumbnail capture** may not work on all sites due to CORS restrictions
 2. **Background tabs** pause thumbnail capture to save resources
 3. **Some sites** may show generic thumbnails if they block canvas access
-4. **Duplicate detection** is based on URL within 30 seconds
 
 ---
 
@@ -212,7 +208,6 @@ Questions, ideas, or bug reports? Email **apphazardstudios@gmail.com**
 
 ## 🔮 Future Ideas
 
-- Sync across devices (optional, privacy-preserving)
 - More sorting and filtering options
 - Bulk operations (rate multiple, add to playlist)
 - Custom thumbnail selection
@@ -223,10 +218,10 @@ Questions, ideas, or bug reports? Email **apphazardstudios@gmail.com**
 
 ## 📄 License
 
-VIBRARY is a proprietary extension by AppHazard Studios. All rights reserved.
+VIBRARY is licensed under the GPL 3.0 License.
 
 ---
 
 <!--  
-Tags: VIBRARY, video tracker, Chrome extension, Brave extension, video playlists, media session, picture-in-picture, offline extension, incognito support, privacy extension, Manifest V3, video rating, thumbnail capture, video library, cross-site playlists
+Tags: VIBRARY, video tracker, Chrome extension, Brave extension, video playlists, media session, video library, offline extension, incognito support, privacy extension, Manifest V3, video rating, thumbnail capture, cross-site playlists
 -->
