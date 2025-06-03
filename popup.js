@@ -1,4 +1,4 @@
-// VIBRARY Popup - Final version with title editing
+// VIBRARY Popup - Final version with title and URL editing
 class VibraryPopup {
   constructor() {
     this.historyVideos = {};
@@ -17,6 +17,7 @@ class VibraryPopup {
     await this.loadData();
     this.setupTabs();
     this.setupButtons();
+    this.setupModals();
     this.render();
 
     // Auto refresh
@@ -88,17 +89,7 @@ class VibraryPopup {
 
     // New playlist
     document.getElementById('new-playlist')?.addEventListener('click', () => {
-      const name = prompt('Playlist name:');
-      if (name) {
-        const trimmedName = name.trim();
-        if (trimmedName && !this.playlists[trimmedName]) {
-          this.playlists[trimmedName] = [];
-          this.saveData();
-          this.render();
-        } else if (this.playlists[trimmedName]) {
-          alert('A playlist with this name already exists');
-        }
-      }
+      this.showNewPlaylistModal();
     });
 
     // Search
@@ -113,6 +104,63 @@ class VibraryPopup {
 
     document.getElementById('sort-by')?.addEventListener('change', () => {
       this.render();
+    });
+  }
+
+  setupModals() {
+    // Setup all modal button handlers to avoid inline onclick
+
+    // Rating modal
+    document.getElementById('save-rating-btn')?.addEventListener('click', () => {
+      this.saveRating();
+    });
+
+    document.getElementById('cancel-rating-btn')?.addEventListener('click', () => {
+      document.getElementById('rating-modal').classList.remove('active');
+    });
+
+    // Playlist modal
+    document.getElementById('create-new-playlist')?.addEventListener('click', () => {
+      this.createNewPlaylistFromModal();
+    });
+
+    document.getElementById('add-to-playlist-btn')?.addEventListener('click', () => {
+      this.addToSelectedPlaylist();
+    });
+
+    document.getElementById('cancel-playlist-btn')?.addEventListener('click', () => {
+      document.getElementById('playlist-modal').classList.remove('active');
+    });
+
+    // Import modal
+    document.getElementById('import-confirm-btn')?.addEventListener('click', () => {
+      this.confirmImport();
+    });
+
+    document.getElementById('import-cancel-btn')?.addEventListener('click', () => {
+      document.getElementById('import-modal').classList.remove('active');
+    });
+
+    // Auto-cleanup modal
+    document.getElementById('cleanup-save-btn')?.addEventListener('click', () => {
+      this.saveCleanupSettings();
+    });
+
+    document.getElementById('cleanup-cancel-btn')?.addEventListener('click', () => {
+      document.getElementById('auto-cleanup-modal').classList.remove('active');
+    });
+
+    // Blacklist modal
+    document.getElementById('blacklist-toggle')?.addEventListener('click', () => {
+      document.getElementById('blacklist-checkbox').classList.toggle('checked');
+    });
+
+    document.getElementById('blacklist-save-btn')?.addEventListener('click', () => {
+      this.saveBlacklistSettings();
+    });
+
+    document.getElementById('blacklist-cancel-btn')?.addEventListener('click', () => {
+      document.getElementById('blacklist-modal').classList.remove('active');
     });
   }
 
@@ -156,6 +204,156 @@ class VibraryPopup {
     });
   }
 
+  // Modal button handlers
+  async saveRating() {
+    const modal = document.getElementById('rating-modal');
+    const videoId = modal.dataset.videoId;
+    const selectedRating = parseInt(modal.dataset.selectedRating || 0);
+
+    if (videoId) {
+      // Update in both storages if exists
+      if (this.historyVideos[videoId]) {
+        this.historyVideos[videoId].rating = selectedRating;
+      }
+      if (this.libraryVideos[videoId]) {
+        this.libraryVideos[videoId].rating = selectedRating;
+      }
+
+      await this.saveData();
+      modal.classList.remove('active');
+      this.render();
+    }
+  }
+
+  createNewPlaylistFromModal() {
+    this.showNewPlaylistModal(true); // true = from within another modal
+  }
+
+  async addToSelectedPlaylist() {
+    const modal = document.getElementById('playlist-modal');
+    const videoId = modal.dataset.videoId;
+    const selected = modal.querySelector('.playlist-option.selected');
+
+    if (selected && videoId) {
+      const playlistName = selected.dataset.name;
+      const video = this.getVideo(videoId);
+
+      // Add to playlist if not already there
+      if (!this.playlists[playlistName].includes(videoId)) {
+        this.playlists[playlistName].push(videoId);
+
+        // Copy to library if not there
+        if (!this.libraryVideos[videoId] && video) {
+          this.libraryVideos[videoId] = { ...video };
+        }
+
+        await this.saveData();
+      }
+    }
+    modal.classList.remove('active');
+  }
+
+  async confirmImport() {
+    const fileInput = document.getElementById('import-file-input');
+    const file = fileInput.files[0];
+
+    if (!file) {
+      alert('Please select a file');
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const importData = JSON.parse(text);
+
+      // Validate data
+      if (!importData.historyVideos && !importData.libraryVideos && !importData.videos) {
+        alert('Invalid backup file');
+        return;
+      }
+
+      // Merge data
+      if (importData.historyVideos) {
+        Object.assign(this.historyVideos, importData.historyVideos);
+      }
+      if (importData.libraryVideos) {
+        Object.assign(this.libraryVideos, importData.libraryVideos);
+      }
+      if (importData.playlists) {
+        Object.assign(this.playlists, importData.playlists);
+      }
+      if (importData.blacklist) {
+        this.blacklist = importData.blacklist;
+      }
+      if (importData.blacklistEnabled !== undefined) {
+        this.blacklistEnabled = importData.blacklistEnabled;
+      }
+      if (importData.cleanupInterval) {
+        this.cleanupInterval = importData.cleanupInterval;
+      }
+
+      // Handle old format
+      if (importData.videos && !importData.historyVideos) {
+        // Old single storage format
+        Object.assign(this.historyVideos, importData.videos);
+
+        // Add playlist videos to library
+        const playlistVideoIds = new Set();
+        Object.values(this.playlists).forEach(ids => {
+          ids.forEach(id => playlistVideoIds.add(id));
+        });
+
+        playlistVideoIds.forEach(id => {
+          if (this.historyVideos[id] && !this.libraryVideos[id]) {
+            this.libraryVideos[id] = { ...this.historyVideos[id] };
+          }
+        });
+      }
+
+      await this.saveData();
+      document.getElementById('import-modal').classList.remove('active');
+      this.render();
+
+      const total = Object.keys(this.historyVideos).length;
+      this.showNotification(`Imported ${total} videos`);
+
+    } catch (error) {
+      alert('Failed to import: ' + error.message);
+    }
+  }
+
+  async saveCleanupSettings() {
+    const intervalSelect = document.getElementById('cleanup-interval');
+    this.cleanupInterval = intervalSelect.value;
+    await chrome.storage.local.set({ cleanupInterval: this.cleanupInterval });
+
+    // Trigger immediate cleanup check
+    chrome.runtime.sendMessage({ action: 'checkCleanup' });
+
+    document.getElementById('auto-cleanup-modal').classList.remove('active');
+    this.showNotification('Auto-cleanup settings saved');
+  }
+
+  async saveBlacklistSettings() {
+    const textarea = document.getElementById('blacklist-textarea');
+    const checkbox = document.getElementById('blacklist-checkbox');
+
+    this.blacklist = textarea.value
+        .split('\n')
+        .map(domain => domain.trim().toLowerCase())
+        .filter(domain => domain.length > 0);
+
+    this.blacklistEnabled = checkbox.classList.contains('checked');
+
+    await chrome.storage.local.set({
+      blacklist: this.blacklist,
+      blacklistEnabled: this.blacklistEnabled
+    });
+
+    document.getElementById('blacklist-modal').classList.remove('active');
+    this.showNotification('Blacklist settings saved');
+  }
+
   // Auto-cleanup modal
   showAutoCleanupModal() {
     const modal = document.getElementById('auto-cleanup-modal');
@@ -163,23 +361,6 @@ class VibraryPopup {
 
     // Set current value
     intervalSelect.value = this.cleanupInterval;
-
-    // Save button
-    document.getElementById('cleanup-save-btn').onclick = async () => {
-      this.cleanupInterval = intervalSelect.value;
-      await chrome.storage.local.set({ cleanupInterval: this.cleanupInterval });
-
-      // Trigger immediate cleanup check
-      chrome.runtime.sendMessage({ action: 'checkCleanup' });
-
-      modal.classList.remove('active');
-      this.showNotification('Auto-cleanup settings saved');
-    };
-
-    // Cancel button
-    document.getElementById('cleanup-cancel-btn').onclick = () => {
-      modal.classList.remove('active');
-    };
 
     modal.classList.add('active');
   }
@@ -189,39 +370,10 @@ class VibraryPopup {
     const modal = document.getElementById('blacklist-modal');
     const textarea = document.getElementById('blacklist-textarea');
     const checkbox = document.getElementById('blacklist-checkbox');
-    const toggle = document.getElementById('blacklist-toggle');
 
     // Set current values
     textarea.value = this.blacklist.join('\n');
     checkbox.classList.toggle('checked', this.blacklistEnabled);
-
-    // Toggle click handler
-    toggle.onclick = () => {
-      checkbox.classList.toggle('checked');
-    };
-
-    // Save button
-    document.getElementById('blacklist-save-btn').onclick = async () => {
-      this.blacklist = textarea.value
-          .split('\n')
-          .map(domain => domain.trim().toLowerCase())
-          .filter(domain => domain.length > 0);
-
-      this.blacklistEnabled = checkbox.classList.contains('checked');
-
-      await chrome.storage.local.set({
-        blacklist: this.blacklist,
-        blacklistEnabled: this.blacklistEnabled
-      });
-
-      modal.classList.remove('active');
-      this.showNotification('Blacklist settings saved');
-    };
-
-    // Cancel button
-    document.getElementById('blacklist-cancel-btn').onclick = () => {
-      modal.classList.remove('active');
-    };
 
     modal.classList.add('active');
   }
@@ -280,79 +432,6 @@ class VibraryPopup {
     if (fileInput) {
       fileInput.value = '';
     }
-
-    // Setup import button
-    document.getElementById('import-confirm-btn').onclick = async () => {
-      const file = fileInput.files[0];
-      if (!file) {
-        alert('Please select a file');
-        return;
-      }
-
-      try {
-        const text = await file.text();
-        const importData = JSON.parse(text);
-
-        // Validate data
-        if (!importData.historyVideos && !importData.libraryVideos && !importData.videos) {
-          alert('Invalid backup file');
-          return;
-        }
-
-        // Merge data
-        if (importData.historyVideos) {
-          Object.assign(this.historyVideos, importData.historyVideos);
-        }
-        if (importData.libraryVideos) {
-          Object.assign(this.libraryVideos, importData.libraryVideos);
-        }
-        if (importData.playlists) {
-          Object.assign(this.playlists, importData.playlists);
-        }
-        if (importData.blacklist) {
-          this.blacklist = importData.blacklist;
-        }
-        if (importData.blacklistEnabled !== undefined) {
-          this.blacklistEnabled = importData.blacklistEnabled;
-        }
-        if (importData.cleanupInterval) {
-          this.cleanupInterval = importData.cleanupInterval;
-        }
-
-        // Handle old format
-        if (importData.videos && !importData.historyVideos) {
-          // Old single storage format
-          Object.assign(this.historyVideos, importData.videos);
-
-          // Add playlist videos to library
-          const playlistVideoIds = new Set();
-          Object.values(this.playlists).forEach(ids => {
-            ids.forEach(id => playlistVideoIds.add(id));
-          });
-
-          playlistVideoIds.forEach(id => {
-            if (this.historyVideos[id] && !this.libraryVideos[id]) {
-              this.libraryVideos[id] = { ...this.historyVideos[id] };
-            }
-          });
-        }
-
-        await this.saveData();
-        modal.classList.remove('active');
-        this.render();
-
-        const total = Object.keys(this.historyVideos).length;
-        this.showNotification(`Imported ${total} videos`);
-
-      } catch (error) {
-        alert('Failed to import: ' + error.message);
-      }
-    };
-
-    // Cancel button
-    document.getElementById('import-cancel-btn').onclick = () => {
-      modal.classList.remove('active');
-    };
 
     modal.classList.add('active');
   }
@@ -514,24 +593,7 @@ class VibraryPopup {
 
     // Make playlist name editable
     playlistNameEl.addEventListener('click', () => {
-      const newName = prompt('Rename playlist:', this.currentPlaylist);
-      if (newName && newName.trim() && newName !== this.currentPlaylist) {
-        const trimmedName = newName.trim();
-
-        // Check if new name already exists
-        if (this.playlists[trimmedName]) {
-          alert('A playlist with this name already exists');
-          return;
-        }
-
-        // Rename playlist
-        this.playlists[trimmedName] = this.playlists[this.currentPlaylist];
-        delete this.playlists[this.currentPlaylist];
-        this.currentPlaylist = trimmedName;
-
-        this.saveData();
-        this.render();
-      }
+      this.showEditPlaylistModal(this.currentPlaylist);
     }, { once: true });
 
     // Get videos from library
@@ -564,6 +626,7 @@ class VibraryPopup {
     const timeAgo = this.getTimeAgo(video.watchedAt);
     const rating = '★'.repeat(video.rating || 0) + '☆'.repeat(5 - (video.rating || 0));
 
+    // Button order: rating, rate, playlist together, then edit and delete
     return `
       <div class="video-item" data-id="${video.id}">
         <div class="video-header" data-url="${this.escapeHtml(video.url)}">
@@ -585,9 +648,9 @@ class VibraryPopup {
         </div>
         <div class="video-actions">
           <div class="video-rating">${rating || 'Unrated'}</div>
-          <button class="btn-small edit-btn" title="Edit title">✏️</button>
           <button class="btn-small rate-btn">Rate</button>
           <button class="btn-small playlist-btn">Playlist</button>
+          <button class="btn-small edit-btn" title="Edit title & URL">✏️</button>
           ${options.showRemove ?
         '<button class="btn-danger btn-small remove-btn">Remove</button>' :
         '<button class="btn-danger btn-small delete-btn">Delete</button>'
@@ -624,7 +687,7 @@ class VibraryPopup {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const videoId = e.target.closest('.video-item').dataset.id;
-        this.editVideoTitle(videoId);
+        this.editVideoDetails(videoId);
       });
     });
 
@@ -739,26 +802,79 @@ class VibraryPopup {
     });
   }
 
-  editVideoTitle(videoId) {
+  editVideoDetails(videoId) {
     const video = this.getVideo(videoId);
     if (!video) return;
 
-    const newTitle = prompt('Edit video title:', video.title);
-    if (newTitle && newTitle.trim() && newTitle !== video.title) {
-      const trimmedTitle = newTitle.trim();
+    // Create a modal-like dialog for editing both title and URL
+    const currentTitle = video.title;
+    const currentUrl = video.url;
 
-      // Update in both storages if exists
-      if (this.historyVideos[videoId]) {
-        this.historyVideos[videoId].title = trimmedTitle;
-      }
-      if (this.libraryVideos[videoId]) {
-        this.libraryVideos[videoId].title = trimmedTitle;
+    // Create custom dialog
+    const dialog = document.createElement('div');
+    dialog.className = 'modal active';
+    dialog.innerHTML = `
+      <div class="modal-content">
+        <h3>Edit Video Details</h3>
+        <div style="text-align: left; margin: 20px 0;">
+          <label style="display: block; color: var(--text-secondary); font-size: 14px; font-weight: 500; margin-bottom: 8px;">Title:</label>
+          <input type="text" id="edit-title-input" value="${this.escapeHtml(currentTitle)}" style="width: 100%; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; font-size: 14px; margin-bottom: 16px;">
+          
+          <label style="display: block; color: var(--text-secondary); font-size: 14px; font-weight: 500; margin-bottom: 8px;">URL:</label>
+          <input type="url" id="edit-url-input" value="${this.escapeHtml(currentUrl)}" style="width: 100%; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; font-size: 14px;">
+        </div>
+        <div class="modal-actions">
+          <button id="save-edit-btn" class="btn-primary">Save Changes</button>
+          <button id="cancel-edit-btn" class="btn-secondary">Cancel</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    // Focus on title input
+    const titleInput = dialog.querySelector('#edit-title-input');
+    const urlInput = dialog.querySelector('#edit-url-input');
+    titleInput.focus();
+    titleInput.select();
+
+    // Save handler
+    dialog.querySelector('#save-edit-btn').addEventListener('click', async () => {
+      const newTitle = titleInput.value.trim();
+      const newUrl = urlInput.value.trim();
+
+      if (newTitle && newUrl) {
+        // Update in both storages if exists
+        if (this.historyVideos[videoId]) {
+          this.historyVideos[videoId].title = newTitle;
+          this.historyVideos[videoId].url = newUrl;
+        }
+        if (this.libraryVideos[videoId]) {
+          this.libraryVideos[videoId].title = newTitle;
+          this.libraryVideos[videoId].url = newUrl;
+        }
+
+        await this.saveData();
+        this.render();
+        this.showNotification('Video details updated');
       }
 
-      this.saveData();
-      this.render();
-      this.showNotification('Title updated');
-    }
+      dialog.remove();
+    });
+
+    // Cancel handler
+    dialog.querySelector('#cancel-edit-btn').addEventListener('click', () => {
+      dialog.remove();
+    });
+
+    // Enter key to save
+    [titleInput, urlInput].forEach(input => {
+      input.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+          dialog.querySelector('#save-edit-btn').click();
+        }
+      });
+    });
   }
 
   showRatingModal(videoId) {
@@ -768,8 +884,12 @@ class VibraryPopup {
     const modal = document.getElementById('rating-modal');
     document.getElementById('rating-video-title').textContent = video.title;
 
+    // Store video ID in modal for later
+    modal.dataset.videoId = videoId;
+
     // Setup stars
     let selectedRating = video.rating || 0;
+    modal.dataset.selectedRating = selectedRating;
     const stars = modal.querySelectorAll('.star');
 
     stars.forEach((star, index) => {
@@ -777,29 +897,10 @@ class VibraryPopup {
 
       star.onclick = () => {
         selectedRating = index + 1;
+        modal.dataset.selectedRating = selectedRating;
         stars.forEach((s, i) => s.classList.toggle('active', i < selectedRating));
       };
     });
-
-    // Save button
-    document.getElementById('save-rating-btn').onclick = async () => {
-      // Update in both storages if exists
-      if (this.historyVideos[videoId]) {
-        this.historyVideos[videoId].rating = selectedRating;
-      }
-      if (this.libraryVideos[videoId]) {
-        this.libraryVideos[videoId].rating = selectedRating;
-      }
-
-      await this.saveData();
-      modal.classList.remove('active');
-      this.render();
-    };
-
-    // Cancel button
-    document.getElementById('cancel-rating-btn').onclick = () => {
-      modal.classList.remove('active');
-    };
 
     modal.classList.add('active');
   }
@@ -811,53 +912,11 @@ class VibraryPopup {
     const modal = document.getElementById('playlist-modal');
     document.getElementById('playlist-video-title').textContent = video.title;
 
-    // Create new playlist button
-    document.getElementById('create-new-playlist').onclick = () => {
-      const name = prompt('New playlist name:');
-      if (name) {
-        const trimmedName = name.trim();
-        if (trimmedName && !this.playlists[trimmedName]) {
-          this.playlists[trimmedName] = [];
-          this.renderPlaylistOptions();
-          // Auto-select the new playlist
-          const newOption = modal.querySelector(`[data-name="${this.escapeHtml(trimmedName)}"]`);
-          if (newOption) {
-            newOption.click();
-          }
-        } else if (this.playlists[trimmedName]) {
-          alert('A playlist with this name already exists');
-        }
-      }
-    };
+    // Store video ID in modal
+    modal.dataset.videoId = videoId;
 
     // Render playlists
     this.renderPlaylistOptions();
-
-    // Add button
-    document.getElementById('add-to-playlist-btn').onclick = async () => {
-      const selected = modal.querySelector('.playlist-option.selected');
-      if (selected) {
-        const playlistName = selected.dataset.name;
-
-        // Add to playlist if not already there
-        if (!this.playlists[playlistName].includes(videoId)) {
-          this.playlists[playlistName].push(videoId);
-
-          // Copy to library if not there
-          if (!this.libraryVideos[videoId]) {
-            this.libraryVideos[videoId] = { ...video };
-          }
-
-          await this.saveData();
-        }
-      }
-      modal.classList.remove('active');
-    };
-
-    // Cancel
-    document.getElementById('cancel-playlist-btn').onclick = () => {
-      modal.classList.remove('active');
-    };
 
     modal.classList.add('active');
   }
@@ -897,6 +956,145 @@ class VibraryPopup {
     if (minutes < 60) return `${minutes}m ago`;
     if (hours < 24) return `${hours}h ago`;
     return `${days}d ago`;
+  }
+
+  showNewPlaylistModal(fromWithinModal = false) {
+    // Create custom dialog
+    const dialog = document.createElement('div');
+    dialog.className = 'modal active';
+    dialog.innerHTML = `
+      <div class="modal-content">
+        <h3>Create New Playlist</h3>
+        <div style="text-align: left; margin: 20px 0;">
+          <label style="display: block; color: var(--text-secondary); font-size: 14px; font-weight: 500; margin-bottom: 8px;">Playlist Name:</label>
+          <input type="text" id="new-playlist-name-input" placeholder="Enter playlist name..." style="width: 100%; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; font-size: 14px;">
+        </div>
+        <div class="modal-actions">
+          <button id="create-playlist-btn" class="btn-primary">Create Playlist</button>
+          <button id="cancel-new-playlist-btn" class="btn-secondary">Cancel</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    // Focus on input
+    const nameInput = dialog.querySelector('#new-playlist-name-input');
+    nameInput.focus();
+
+    // Create handler
+    dialog.querySelector('#create-playlist-btn').addEventListener('click', async () => {
+      const name = nameInput.value.trim();
+
+      if (name) {
+        if (this.playlists[name]) {
+          // Show error in same dialog
+          nameInput.style.borderColor = 'var(--danger)';
+          nameInput.placeholder = 'A playlist with this name already exists';
+          nameInput.value = '';
+          nameInput.focus();
+          return;
+        }
+
+        this.playlists[name] = [];
+        await this.saveData();
+
+        if (fromWithinModal) {
+          // We're creating from within the playlist modal
+          this.renderPlaylistOptions();
+          // Auto-select the new playlist
+          const modal = document.getElementById('playlist-modal');
+          const newOption = modal.querySelector(`[data-name="${this.escapeHtml(name)}"]`);
+          if (newOption) {
+            newOption.click();
+          }
+        } else {
+          this.render();
+        }
+
+        this.showNotification('Playlist created');
+      }
+
+      dialog.remove();
+    });
+
+    // Cancel handler
+    dialog.querySelector('#cancel-new-playlist-btn').addEventListener('click', () => {
+      dialog.remove();
+    });
+
+    // Enter key to create
+    nameInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        dialog.querySelector('#create-playlist-btn').click();
+      }
+    });
+  }
+
+  showEditPlaylistModal(currentName) {
+    // Create custom dialog
+    const dialog = document.createElement('div');
+    dialog.className = 'modal active';
+    dialog.innerHTML = `
+      <div class="modal-content">
+        <h3>Rename Playlist</h3>
+        <div style="text-align: left; margin: 20px 0;">
+          <label style="display: block; color: var(--text-secondary); font-size: 14px; font-weight: 500; margin-bottom: 8px;">Playlist Name:</label>
+          <input type="text" id="edit-playlist-name-input" value="${this.escapeHtml(currentName)}" style="width: 100%; background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; font-size: 14px;">
+        </div>
+        <div class="modal-actions">
+          <button id="save-playlist-name-btn" class="btn-primary">Save Changes</button>
+          <button id="cancel-edit-playlist-btn" class="btn-secondary">Cancel</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    // Focus and select text
+    const nameInput = dialog.querySelector('#edit-playlist-name-input');
+    nameInput.focus();
+    nameInput.select();
+
+    // Save handler
+    dialog.querySelector('#save-playlist-name-btn').addEventListener('click', async () => {
+      const newName = nameInput.value.trim();
+
+      if (newName && newName !== currentName) {
+        if (this.playlists[newName]) {
+          // Show error in same dialog
+          nameInput.style.borderColor = 'var(--danger)';
+          nameInput.placeholder = 'A playlist with this name already exists';
+          nameInput.value = currentName;
+          nameInput.focus();
+          nameInput.select();
+          return;
+        }
+
+        // Rename playlist
+        this.playlists[newName] = this.playlists[currentName];
+        delete this.playlists[currentName];
+        this.currentPlaylist = newName;
+
+        await this.saveData();
+        this.render();
+        this.showNotification('Playlist renamed');
+      }
+
+      dialog.remove();
+    });
+
+    // Cancel handler
+    dialog.querySelector('#cancel-edit-playlist-btn').addEventListener('click', () => {
+      dialog.remove();
+    });
+
+    // Enter key to save
+    nameInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        dialog.querySelector('#save-playlist-name-btn').click();
+      }
+    });
   }
 
   escapeHtml(text) {

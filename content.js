@@ -213,9 +213,8 @@ class VideoDetector {
       if (urlObj.pathname === '/' && !urlObj.search) return;
     } catch (e) {}
 
-    // More robust duplicate check
+    // More robust duplicate check - based on URL only within last 10 seconds
     const isDuplicate = this.lastProcessedVideo &&
-        this.lastProcessedVideo.title === title &&
         this.lastProcessedVideo.url === pageUrl &&
         Date.now() - this.lastProcessedVideo.time < 10000;
 
@@ -283,7 +282,8 @@ class VideoDetector {
         'twitter.com': 'Twitter',
         'x.com': 'X (Twitter)',
         'reddit.com': 'Reddit',
-        'tiktok.com': 'TikTok'
+        'tiktok.com': 'TikTok',
+        'hqporner.com': 'HQporner'
       };
 
       if (knownSites[hostname]) {
@@ -427,8 +427,13 @@ class VideoDetector {
           }
         }
 
-        // Continue checking
-        requestAnimationFrame(checkCapture);
+        // Continue checking - but only if page is visible
+        if (!document.hidden) {
+          requestAnimationFrame(checkCapture);
+        } else {
+          // When page is hidden, check less frequently
+          setTimeout(checkCapture, 1000);
+        }
 
       } catch (e) {
         console.error('Capture check error:', e);
@@ -440,6 +445,13 @@ class VideoDetector {
 
     // Start checking
     requestAnimationFrame(checkCapture);
+
+    // Resume when page becomes visible
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && !session.cancelled && this.activeSessions.has(videoId)) {
+        requestAnimationFrame(checkCapture);
+      }
+    });
 
     // Also listen for video end
     video.addEventListener('ended', () => {
@@ -675,24 +687,45 @@ class VideoDetector {
       const data = await chrome.storage.local.get(['historyVideos']);
       const historyVideos = data.historyVideos || {};
 
-      // More robust duplicate check
-      const duplicate = Object.values(historyVideos).find(v => {
-        // Same URL and title
-        if (v.url === videoData.url && v.title === videoData.title) {
-          // Within 5 minutes
-          if (Date.now() - v.watchedAt < 300000) {
-            return true;
-          }
+      // Check for existing video with same URL (not title)
+      const existingVideo = Object.entries(historyVideos).find(([id, v]) => {
+        // Same URL within last 30 seconds - this is a duplicate
+        if (v.url === videoData.url && Date.now() - v.watchedAt < 30000) {
+          return true;
         }
         return false;
       });
 
-      if (duplicate) {
-        console.log('⏭️ Skipping duplicate');
+      if (existingVideo) {
+        console.log('⏭️ Skipping duplicate (same URL)');
+
+        // If title changed, update the existing entry
+        const [existingId, existingData] = existingVideo;
+        if (existingData.title !== videoData.title) {
+          console.log('📝 Updating title for existing video');
+          historyVideos[existingId] = {
+            ...existingData,
+            title: videoData.title,
+            watchedAt: Date.now() // Update watch time
+          };
+
+          // Also update in library if it exists
+          const libData = await chrome.storage.local.get(['libraryVideos']);
+          const libraryVideos = libData.libraryVideos || {};
+          if (libraryVideos[existingId]) {
+            libraryVideos[existingId] = {
+              ...libraryVideos[existingId],
+              title: videoData.title
+            };
+            await chrome.storage.local.set({ historyVideos, libraryVideos });
+          } else {
+            await chrome.storage.local.set({ historyVideos });
+          }
+        }
         return;
       }
 
-      // Save to history only
+      // Save new video to history
       historyVideos[videoData.id] = videoData;
       await chrome.storage.local.set({ historyVideos });
 
