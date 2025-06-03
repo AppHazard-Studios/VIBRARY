@@ -777,14 +777,34 @@ body {
   border-top: 1px solid var(--border-subtle);
 }
 
-.video-rating {
-  color: var(--warning);
-  font-weight: 600;
-  font-size: 13px;
-  flex-shrink: 0;
+/* Interactive star rating */
+.star-rating-interactive {
   display: flex;
-  align-items: center;
-  gap: 4px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.star-interactive {
+  font-size: 18px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: var(--transition-fast);
+  padding: 4px;
+  user-select: none;
+  line-height: 1;
+}
+
+.star-interactive.filled {
+  color: var(--warning);
+}
+
+.star-interactive.hover {
+  color: var(--warning);
+  transform: scale(1.1);
+}
+
+.star-interactive:hover {
+  transform: scale(1.15);
 }
 
 /* Library & Playlists */

@@ -213,10 +213,8 @@ class VideoDetector {
       if (urlObj.pathname === '/' && !urlObj.search) return;
     } catch (e) {}
 
-    // More robust duplicate check - based on URL only within last 10 seconds
-    const isDuplicate = this.lastProcessedVideo &&
-        this.lastProcessedVideo.url === pageUrl &&
-        Date.now() - this.lastProcessedVideo.time < 10000;
+    // Check for duplicate URL
+    const isDuplicate = this.lastProcessedVideo && this.lastProcessedVideo.url === pageUrl;
 
     if (isDuplicate) {
       // But still update capture if video element changed
@@ -230,7 +228,7 @@ class VideoDetector {
           const historyVideos = data.historyVideos || {};
 
           const recentVideo = Object.entries(historyVideos)
-              .find(([id, v]) => v.url === pageUrl && Date.now() - v.watchedAt < 30000);
+              .find(([id, v]) => v.url === pageUrl);
 
           if (recentVideo) {
             this.startWatchCapture(video, recentVideo[0]);
@@ -560,7 +558,7 @@ class VideoDetector {
           return;
         }
 
-        // Convert to data URL with compression
+        // Convert to data URL with 50% compression for storage efficiency
         canvas.toBlob(
             (blob) => {
               if (blob) {
@@ -572,7 +570,7 @@ class VideoDetector {
               }
             },
             'image/jpeg',
-            0.7
+            0.5  // Reduced from 0.7 to 0.5 (50% quality)
         );
 
       } catch (e) {
@@ -687,41 +685,11 @@ class VideoDetector {
       const data = await chrome.storage.local.get(['historyVideos']);
       const historyVideos = data.historyVideos || {};
 
-      // Check for existing video with same URL (not title)
-      const existingVideo = Object.entries(historyVideos).find(([id, v]) => {
-        // Same URL within last 30 seconds - this is a duplicate
-        if (v.url === videoData.url && Date.now() - v.watchedAt < 30000) {
-          return true;
-        }
-        return false;
-      });
+      // Check for existing video with same URL
+      const existingVideo = Object.entries(historyVideos).find(([id, v]) => v.url === videoData.url);
 
       if (existingVideo) {
-        console.log('⏭️ Skipping duplicate (same URL)');
-
-        // If title changed, update the existing entry
-        const [existingId, existingData] = existingVideo;
-        if (existingData.title !== videoData.title) {
-          console.log('📝 Updating title for existing video');
-          historyVideos[existingId] = {
-            ...existingData,
-            title: videoData.title,
-            watchedAt: Date.now() // Update watch time
-          };
-
-          // Also update in library if it exists
-          const libData = await chrome.storage.local.get(['libraryVideos']);
-          const libraryVideos = libData.libraryVideos || {};
-          if (libraryVideos[existingId]) {
-            libraryVideos[existingId] = {
-              ...libraryVideos[existingId],
-              title: videoData.title
-            };
-            await chrome.storage.local.set({ historyVideos, libraryVideos });
-          } else {
-            await chrome.storage.local.set({ historyVideos });
-          }
-        }
+        console.log('⏭️ Skipping duplicate URL:', videoData.url);
         return;
       }
 

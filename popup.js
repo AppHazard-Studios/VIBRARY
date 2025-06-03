@@ -9,6 +9,9 @@ class VibraryPopup {
     this.cleanupInterval = 'off';
     this.currentTab = 'history';
     this.currentPlaylist = null;
+    this.refreshInterval = null;
+    this.lastVideoCount = 0;
+    this.newVideoTime = null;
 
     this.init();
   }
@@ -23,6 +26,13 @@ class VibraryPopup {
     // Auto refresh
     chrome.storage.onChanged.addListener(() => {
       this.loadData().then(() => this.render());
+    });
+
+    // Cleanup on popup close
+    window.addEventListener('unload', () => {
+      if (this.refreshInterval) {
+        clearInterval(this.refreshInterval);
+      }
     });
   }
 
@@ -41,6 +51,34 @@ class VibraryPopup {
     this.blacklist = data.blacklist || [];
     this.blacklistEnabled = data.blacklistEnabled || false;
     this.cleanupInterval = data.cleanupInterval || 'off';
+
+    // Check if we have a new video
+    const currentVideoCount = Object.keys(this.historyVideos).length;
+    if (currentVideoCount > this.lastVideoCount && this.lastVideoCount > 0) {
+      // New video detected! Start refresh timer
+      this.newVideoTime = Date.now();
+      this.startRefreshTimer();
+    }
+    this.lastVideoCount = currentVideoCount;
+  }
+
+  startRefreshTimer() {
+    // Clear any existing timer
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+    }
+
+    // Refresh every 2 seconds for the first 15 seconds
+    this.refreshInterval = setInterval(() => {
+      if (Date.now() - this.newVideoTime > 15000) {
+        // Stop after 15 seconds
+        clearInterval(this.refreshInterval);
+        this.refreshInterval = null;
+      } else {
+        // Refresh the UI
+        this.render();
+      }
+    }, 2000);
   }
 
   async saveData() {
@@ -624,9 +662,16 @@ class VibraryPopup {
 
   createVideoCard(video, options = {}) {
     const timeAgo = this.getTimeAgo(video.watchedAt);
-    const rating = '★'.repeat(video.rating || 0) + '☆'.repeat(5 - (video.rating || 0));
 
-    // Button order: rating, rate, playlist together, then edit and delete
+    // Create interactive star rating
+    const stars = [];
+    for (let i = 1; i <= 5; i++) {
+      const filled = i <= (video.rating || 0);
+      stars.push(`<span class="star-interactive ${filled ? 'filled' : ''}" data-rating="${i}" title="${i} star${i > 1 ? 's' : ''}">★</span>`);
+    }
+    const starRating = stars.join('');
+
+    // Button order: interactive stars, playlist, edit, delete
     return `
       <div class="video-item" data-id="${video.id}">
         <div class="video-header" data-url="${this.escapeHtml(video.url)}">
@@ -647,8 +692,9 @@ class VibraryPopup {
           </div>
         </div>
         <div class="video-actions">
-          <div class="video-rating">${rating || 'Unrated'}</div>
-          <button class="btn-small rate-btn">Rate</button>
+          <div class="star-rating-interactive" data-video-id="${video.id}">
+            ${starRating}
+          </div>
           <button class="btn-small playlist-btn">Playlist</button>
           <button class="btn-small edit-btn" title="Edit title & URL">✏️</button>
           ${options.showRemove ?
@@ -682,21 +728,52 @@ class VibraryPopup {
       });
     });
 
+    // Interactive star rating
+    container.querySelectorAll('.star-rating-interactive').forEach(ratingContainer => {
+      const stars = ratingContainer.querySelectorAll('.star-interactive');
+      const videoId = ratingContainer.dataset.videoId;
+
+      // Hover effect
+      stars.forEach((star, index) => {
+        star.addEventListener('mouseenter', () => {
+          // Highlight all stars up to and including hovered one
+          stars.forEach((s, i) => {
+            s.classList.toggle('hover', i <= index);
+          });
+        });
+      });
+
+      // Mouse leave - remove all hover states
+      ratingContainer.addEventListener('mouseleave', () => {
+        stars.forEach(s => s.classList.remove('hover'));
+      });
+
+      // Click to set rating
+      stars.forEach((star, index) => {
+        star.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const rating = index + 1;
+
+          // Update in both storages if exists
+          if (this.historyVideos[videoId]) {
+            this.historyVideos[videoId].rating = rating;
+          }
+          if (this.libraryVideos[videoId]) {
+            this.libraryVideos[videoId].rating = rating;
+          }
+
+          await this.saveData();
+          this.render();
+        });
+      });
+    });
+
     // Edit title button
     container.querySelectorAll('.edit-btn').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const videoId = e.target.closest('.video-item').dataset.id;
         this.editVideoDetails(videoId);
-      });
-    });
-
-    // Rate button
-    container.querySelectorAll('.rate-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const videoId = e.target.closest('.video-item').dataset.id;
-        this.showRatingModal(videoId);
       });
     });
 
