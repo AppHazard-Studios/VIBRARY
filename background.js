@@ -153,14 +153,12 @@ class VibraryBackground {
   }
 
   async checkAutoCleanup() {
-    console.log('🧹 VIBRARY: Checking auto-cleanup settings');
-
     try {
       const data = await chrome.storage.local.get([
         'cleanupInterval',
         'historyVideos',
         'playlists',
-        'libraryVideos', // Get this to verify we're not touching it
+        'libraryVideos',
         'lastCleanupTime'
       ]);
 
@@ -169,21 +167,13 @@ class VibraryBackground {
       const playlists = data.playlists || {};
       const lastCleanupTime = data.lastCleanupTime || Date.now();
 
-      // Log current state
-      console.log(`VIBRARY: Cleanup interval: ${cleanupInterval}`);
-      console.log(`VIBRARY: History videos: ${Object.keys(historyVideos).length}`);
-      console.log(`VIBRARY: Library videos: ${Object.keys(data.libraryVideos || {}).length}`);
-      console.log(`VIBRARY: Playlists: ${Object.keys(playlists).length}`);
-
       if (cleanupInterval === 'off') {
-        console.log('VIBRARY: Auto-cleanup is disabled');
         return;
       }
 
       // Check if enough time has passed since last cleanup (minimum 1 hour)
       const hoursSinceLastCleanup = (Date.now() - lastCleanupTime) / (1000 * 60 * 60);
       if (hoursSinceLastCleanup < 1) {
-        console.log(`VIBRARY: Skipping cleanup, only ${hoursSinceLastCleanup.toFixed(1)} hours since last run`);
         return;
       }
 
@@ -203,8 +193,6 @@ class VibraryBackground {
         }
       });
 
-      console.log(`VIBRARY: ${protectedVideoIds.size} videos are protected by playlists`);
-
       // Find videos to remove (ONLY from history, NEVER from library)
       const toRemove = [];
       for (const [id, video] of Object.entries(historyVideos)) {
@@ -215,8 +203,6 @@ class VibraryBackground {
       }
 
       if (toRemove.length > 0) {
-        console.log(`🗑️ VIBRARY: Removing ${toRemove.length} old history items`);
-
         // Remove ONLY from historyVideos
         toRemove.forEach(id => {
           delete historyVideos[id];
@@ -229,12 +215,7 @@ class VibraryBackground {
         });
 
         console.log(`✅ VIBRARY: Cleaned up ${toRemove.length} videos older than ${intervalDays} days`);
-
-        // Verify library wasn't touched
-        const newData = await chrome.storage.local.get(['libraryVideos']);
-        console.log(`VIBRARY: Library still has ${Object.keys(newData.libraryVideos || {}).length} videos (unchanged)`);
       } else {
-        console.log('VIBRARY: No videos to clean up');
         // Still update last cleanup time
         await chrome.storage.local.set({ lastCleanupTime: Date.now() });
       }

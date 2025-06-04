@@ -378,7 +378,7 @@ class VideoDetector {
       maxThumbs: 10
     };
 
-    // Keep crossOrigin, but remove the “initial seek” listener entirely
+    // Keep crossOrigin, but remove the "initial seek" listener entirely
     try {
       video.crossOrigin = 'anonymous';
     } catch (e) {
@@ -514,8 +514,9 @@ class VideoDetector {
 
       // Only log first security error to reduce noise
       if (session.failedAttempts === 1 && error.name === 'SecurityError') {
-        console.log('📸 Cross-origin video detected, capture may be limited');
+        // Silently handle cross-origin restrictions
       } else if (session.failedAttempts === 1 && error.name !== 'SecurityError') {
+        // Log non-security errors for debugging
         console.warn('Capture attempt failed:', error.name);
       }
 
@@ -526,7 +527,7 @@ class VideoDetector {
 
       // Give up after too many failures
       if (session.failedAttempts === 5) {
-        console.log('📸 Unable to capture thumbnails for this video');
+        // Silently stop trying
       }
 
       return null;
