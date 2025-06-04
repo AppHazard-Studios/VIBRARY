@@ -671,7 +671,7 @@ class VibraryPopup {
     }
     const starRating = stars.join('');
 
-    // Button order: interactive stars, playlist, edit, delete
+    // Button order: interactive stars, add to playlist, edit, delete
     return `
       <div class="video-item" data-id="${video.id}">
         <div class="video-header" data-url="${this.escapeHtml(video.url)}">
@@ -695,8 +695,8 @@ class VibraryPopup {
           <div class="star-rating-interactive" data-video-id="${video.id}">
             ${starRating}
           </div>
-          <button class="btn-small playlist-btn">Playlist</button>
-          <button class="btn-small edit-btn" title="Edit title & URL">✏️</button>
+          <button class="btn-small playlist-btn">+ Playlist</button>
+          <button class="btn-small edit-btn">Edit</button>
           ${options.showRemove ?
         '<button class="btn-danger btn-small remove-btn">Remove</button>' :
         '<button class="btn-danger btn-small delete-btn">Delete</button>'
@@ -1000,20 +1000,47 @@ class VibraryPopup {
 
   renderPlaylistOptions() {
     const container = document.getElementById('playlist-options');
-    container.innerHTML = Object.keys(this.playlists).map(name => `
-      <div class="playlist-option" data-name="${this.escapeHtml(name)}">
-        ${this.escapeHtml(name)}
-      </div>
-    `).join('');
+    const playlists = Object.keys(this.playlists);
 
-    // Selection
+    // If there are existing playlists, show them
+    if (playlists.length > 0) {
+      container.innerHTML = playlists.map(name => `
+        <div class="playlist-option" data-name="${this.escapeHtml(name)}">
+          ${this.escapeHtml(name)}
+        </div>
+      `).join('');
+
+      // Add the divider and new playlist option at the bottom
+      container.innerHTML += `
+        <div class="playlist-option-divider"></div>
+        <div class="playlist-option playlist-option-new" data-action="create-new">
+          <span class="playlist-option-icon">+</span> Create New Playlist
+        </div>
+      `;
+    } else {
+      // No playlists yet, just show create new option
+      container.innerHTML = `
+        <div class="empty-playlist-message">No playlists yet</div>
+        <div class="playlist-option playlist-option-new" data-action="create-new">
+          <span class="playlist-option-icon">+</span> Create New Playlist
+        </div>
+      `;
+    }
+
+    // Selection and click handlers
     container.querySelectorAll('.playlist-option').forEach(opt => {
-      opt.addEventListener('click', () => {
-        container.querySelectorAll('.playlist-option').forEach(o =>
-            o.classList.remove('selected')
-        );
-        opt.classList.add('selected');
-      });
+      if (opt.dataset.action === 'create-new') {
+        opt.addEventListener('click', () => {
+          this.createNewPlaylistFromModal();
+        });
+      } else {
+        opt.addEventListener('click', () => {
+          container.querySelectorAll('.playlist-option').forEach(o =>
+              o.classList.remove('selected')
+          );
+          opt.classList.add('selected');
+        });
+      }
     });
   }
 

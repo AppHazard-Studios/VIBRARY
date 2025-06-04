@@ -113,8 +113,21 @@ class VideoDetector {
       // Try to start watch-based capture for video element
       setTimeout(() => {
         const video = this.findMainVideo();
+        try {
+          video.crossOrigin = 'anonymous';
+        } catch (e) {
+          // ignore if setting crossOrigin fails
+        }
         if (video && video.duration > 5) {
-          this.startWatchCapture(video, videoData.id);
+          chrome.storage.local.get('historyVideos', data => {
+            const history = data.historyVideos || {};
+            const already = Object.values(history).find(v => v.url === window.location.href && v.thumbnailCollection?.length);
+            if (!already) {
+              this.startWatchCapture(video, videoData.id);
+            } else {
+              console.log('📸 Already have thumbnails for this URL—skipping capture.');
+            }
+          });
         }
       }, 1000);
     }, 2000);
@@ -254,8 +267,21 @@ class VideoDetector {
       noMediaSession: true
     };
 
-    // Start watch-based capture
-    this.startWatchCapture(video, videoData.id);
+    // Start watch-based capture, but check storage for existing thumbnails
+    try {
+      video.crossOrigin = 'anonymous';
+    } catch (e) {
+      // ignore if setting crossOrigin fails
+    }
+    chrome.storage.local.get('historyVideos', data => {
+      const history = data.historyVideos || {};
+      const already = Object.values(history).find(v => v.url === window.location.href && v.thumbnailCollection?.length);
+      if (!already) {
+        this.startWatchCapture(video, videoData.id);
+      } else {
+        console.log('📸 Already have thumbnails—skipping capture.');
+      }
+    });
 
     // Save after a delay to get first thumbnail
     setTimeout(() => {
@@ -342,16 +368,24 @@ class VideoDetector {
       videoId: videoId,
       thumbnails: [],
       lastCaptureTime: -30, // Start capturing immediately
-      captureInterval: 15, // Capture every 15 seconds initially
+      captureInterval: 15,  // Capture every 15 seconds initially
       cancelled: false,
       lastPlayTime: video.currentTime,
       startTime: Date.now(),
       failedAttempts: 0,
-      lastSeekTime: video.currentTime
+      lastSeekTime: video.currentTime,
+      __hasForcedSeek: false,
+      maxThumbs: 10
     };
 
-    this.activeSessions.set(videoId, session);
+    // Keep crossOrigin, but remove the “initial seek” listener entirely
+    try {
+      video.crossOrigin = 'anonymous';
+    } catch (e) {
+      // ignore if setting crossOrigin fails
+    }
 
+    this.activeSessions.set(videoId, session);
     console.log(`📸 Starting watch-based capture for ${videoId}`);
 
     // Adjust capture interval based on video length
@@ -380,8 +414,8 @@ class VideoDetector {
           return;
         }
 
-        // If paused for more than 30 seconds, finalize
-        if (video.paused && Date.now() - session.startTime > 30000) {
+        // If paused for more than 5 minutes, finalize
+        if (video.paused && Date.now() - session.startTime > 300000) {
           if (session.thumbnails.length > 0) {
             this.finalizeCapture(session);
           }
@@ -410,11 +444,6 @@ class VideoDetector {
                   session.lastCaptureTime = currentTime;
                   session.failedAttempts = 0; // Reset failed attempts on success
 
-                  // Keep only the last 10 thumbnails
-                  if (session.thumbnails.length > 10) {
-                    session.thumbnails = session.thumbnails.slice(-10);
-                  }
-
                   // Update storage with current thumbnails
                   this.updateThumbnail(videoId, thumbnail, session.thumbnails);
 
@@ -425,7 +454,7 @@ class VideoDetector {
           }
         }
 
-        // Continue checking - but only if page is visible
+        // Continue checking – but only if page is visible
         if (!document.hidden) {
           requestAnimationFrame(checkCapture);
         } else {
@@ -589,14 +618,25 @@ class VideoDetector {
     session.cancelled = true;
     this.activeSessions.delete(session.id);
 
-    // Use middle thumbnail as primary, or last one if fewer than 3
-    const primaryIndex = session.thumbnails.length < 3 ?
-        session.thumbnails.length - 1 :
-        Math.floor(session.thumbnails.length / 2);
-    const primary = session.thumbnails[primaryIndex];
+    const allThumbs = session.thumbnails;
+    const total = allThumbs.length;
+    const max = session.maxThumbs;
 
-    this.updateThumbnail(session.videoId, primary.thumbnail, session.thumbnails);
-    console.log(`📸 Finalized capture with ${session.thumbnails.length} thumbnails`);
+    let finalThumbs;
+    if (total <= max) {
+      finalThumbs = allThumbs;
+    } else {
+      finalThumbs = [];
+      for (let i = 0; i < max; i++) {
+        const idx = Math.floor(i * (total - 1) / (max - 1));
+        finalThumbs.push(allThumbs[idx]);
+      }
+    }
+
+    const primary = finalThumbs[Math.floor(finalThumbs.length / 2)];
+
+    this.updateThumbnail(session.videoId, primary.thumbnail, finalThumbs);
+    console.log(`📸 Finalized capture with ${finalThumbs.length} thumbnails (downsampled from ${total})`);
   }
 
   cleanupOldSessions() {

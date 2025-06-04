@@ -768,7 +768,7 @@ body {
 
 .video-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
@@ -777,19 +777,19 @@ body {
   border-top: 1px solid var(--border-subtle);
 }
 
-/* Interactive star rating */
+/* Interactive star rating with reduced spacing */
 .star-rating-interactive {
   display: flex;
-  gap: 2px;
+  gap: 0;
   flex-shrink: 0;
 }
 
 .star-interactive {
-  font-size: 18px;
+  font-size: 16px;
   color: var(--text-muted);
   cursor: pointer;
   transition: var(--transition-fast);
-  padding: 4px;
+  padding: 2px;
   user-select: none;
   line-height: 1;
 }
@@ -1049,7 +1049,7 @@ body {
 
 /* Playlist options in modal */
 .playlist-options {
-  max-height: 160px;
+  max-height: 200px;
   overflow-y: auto;
   margin: 20px 0;
   border: 1px solid var(--border);
@@ -1080,6 +1080,40 @@ body {
 .playlist-option.selected {
   background: var(--accent);
   color: white;
+}
+
+/* New playlist option styles */
+.playlist-option-new {
+  background: var(--bg-elevated);
+  color: var(--accent);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.playlist-option-new:hover {
+  background: var(--accent);
+  color: white;
+}
+
+.playlist-option-icon {
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.playlist-option-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0;
+}
+
+.empty-playlist-message {
+  padding: 14px 18px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  font-style: italic;
 }
 
 /* Auto-Cleanup Settings */
