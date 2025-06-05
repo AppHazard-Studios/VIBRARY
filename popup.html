@@ -19,21 +19,25 @@
   <!-- History Tab -->
   <div id="history" class="tab-content active">
     <div class="controls">
-      <input type="text" id="search-input" placeholder="Search..." class="search-input">
-      <select id="rating-filter" title="Filter by rating">
-        <option value="all">All</option>
-        <option value="5">★★★★★</option>
-        <option value="4">★★★★</option>
-        <option value="3">★★★</option>
-        <option value="2">★★</option>
-        <option value="1">★</option>
-        <option value="0">Unrated</option>
-      </select>
-      <select id="sort-by" title="Sort videos">
-        <option value="date">Recent</option>
-        <option value="rating">Rating</option>
-      </select>
-      <button id="clear-history" class="btn-danger btn-small" title="Delete all history">Delete All</button>
+      <div class="search-row">
+        <input type="text" id="search-input" placeholder="Search..." class="search-input">
+      </div>
+      <div class="filter-row">
+        <select id="rating-filter" title="Filter by rating">
+          <option value="all">All</option>
+          <option value="5">★★★★★</option>
+          <option value="4">★★★★</option>
+          <option value="3">★★★</option>
+          <option value="2">★★</option>
+          <option value="1">★</option>
+          <option value="0">Unrated</option>
+        </select>
+        <select id="sort-by" title="Sort videos">
+          <option value="date">Recent</option>
+          <option value="rating">Rating</option>
+        </select>
+        <button id="clear-history" class="btn-danger btn-small" title="Delete all history">Delete All</button>
+      </div>
     </div>
     <div id="history-list" class="video-list"></div>
   </div>
@@ -148,6 +152,42 @@
     <div class="modal-actions">
       <button id="blacklist-save-btn" class="btn-primary">Save Changes</button>
       <button id="blacklist-cancel-btn" class="btn-secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Confirmation Modal -->
+<div id="delete-confirm-modal" class="modal">
+  <div class="modal-content">
+    <h3 id="delete-confirm-title">Delete Video</h3>
+    <p id="delete-confirm-message">Are you sure you want to delete this video from history?</p>
+    <div class="modal-actions">
+      <button id="delete-confirm-btn" class="btn-danger">Delete</button>
+      <button id="delete-cancel-btn" class="btn-secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Clear All Confirmation Modal -->
+<div id="clear-all-modal" class="modal">
+  <div class="modal-content">
+    <h3>Clear All History</h3>
+    <p>Are you sure you want to clear all history? Videos in playlists will be preserved.</p>
+    <div class="modal-actions">
+      <button id="clear-all-confirm-btn" class="btn-danger">Clear All</button>
+      <button id="clear-all-cancel-btn" class="btn-secondary">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Playlist Confirmation Modal -->
+<div id="delete-playlist-modal" class="modal">
+  <div class="modal-content">
+    <h3>Delete Playlist</h3>
+    <p id="delete-playlist-message">Are you sure you want to delete this playlist?</p>
+    <div class="modal-actions">
+      <button id="delete-playlist-confirm-btn" class="btn-danger">Delete</button>
+      <button id="delete-playlist-cancel-btn" class="btn-secondary">Cancel</button>
     </div>
   </div>
 </div>

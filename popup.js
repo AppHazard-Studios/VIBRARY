@@ -1,4 +1,4 @@
-// VIBRARY Popup - Final version with title and URL editing
+// VIBRARY Popup - Final version with custom modals
 class VibraryPopup {
   constructor() {
     this.historyVideos = {};
@@ -113,13 +113,9 @@ class VibraryPopup {
   }
 
   setupButtons() {
-    // Clear history
+    // Clear history - now shows custom modal
     document.getElementById('clear-history')?.addEventListener('click', () => {
-      if (confirm('Clear all history? Videos in playlists will be preserved.')) {
-        this.historyVideos = {};
-        this.saveData();
-        this.render();
-      }
+      this.showClearAllModal();
     });
 
     // Settings menu
@@ -200,6 +196,33 @@ class VibraryPopup {
     document.getElementById('blacklist-cancel-btn')?.addEventListener('click', () => {
       document.getElementById('blacklist-modal').classList.remove('active');
     });
+
+    // Delete confirmation modal
+    document.getElementById('delete-confirm-btn')?.addEventListener('click', () => {
+      this.confirmDeleteVideo();
+    });
+
+    document.getElementById('delete-cancel-btn')?.addEventListener('click', () => {
+      document.getElementById('delete-confirm-modal').classList.remove('active');
+    });
+
+    // Clear all confirmation modal
+    document.getElementById('clear-all-confirm-btn')?.addEventListener('click', () => {
+      this.confirmClearAll();
+    });
+
+    document.getElementById('clear-all-cancel-btn')?.addEventListener('click', () => {
+      document.getElementById('clear-all-modal').classList.remove('active');
+    });
+
+    // Delete playlist confirmation modal
+    document.getElementById('delete-playlist-confirm-btn')?.addEventListener('click', () => {
+      this.confirmDeletePlaylist();
+    });
+
+    document.getElementById('delete-playlist-cancel-btn')?.addEventListener('click', () => {
+      document.getElementById('delete-playlist-modal').classList.remove('active');
+    });
   }
 
   setupSettingsMenu() {
@@ -240,6 +263,94 @@ class VibraryPopup {
         }
       });
     });
+  }
+
+  // NEW: Show clear all modal
+  showClearAllModal() {
+    document.getElementById('clear-all-modal').classList.add('active');
+  }
+
+  // NEW: Confirm clear all
+  async confirmClearAll() {
+    this.historyVideos = {};
+    await this.saveData();
+    document.getElementById('clear-all-modal').classList.remove('active');
+    this.render();
+    this.showNotification('History cleared');
+  }
+
+  // NEW: Show delete video modal
+  showDeleteVideoModal(videoId) {
+    const modal = document.getElementById('delete-confirm-modal');
+    const video = this.getVideo(videoId);
+
+    if (video) {
+      document.getElementById('delete-confirm-title').textContent = 'Delete Video';
+      document.getElementById('delete-confirm-message').textContent =
+          `Are you sure you want to delete "${video.title}" from history?`;
+
+      // Store video ID in modal for later
+      modal.dataset.videoId = videoId;
+      modal.classList.add('active');
+    }
+  }
+
+  // NEW: Confirm delete video
+  async confirmDeleteVideo() {
+    const modal = document.getElementById('delete-confirm-modal');
+    const videoId = modal.dataset.videoId;
+
+    if (videoId) {
+      // Check if in any playlist
+      const inPlaylist = Object.values(this.playlists)
+          .some(playlist => playlist.includes(videoId));
+
+      if (inPlaylist) {
+        // Just remove from history
+        delete this.historyVideos[videoId];
+      } else {
+        // Remove from both
+        delete this.historyVideos[videoId];
+        delete this.libraryVideos[videoId];
+      }
+
+      await this.saveData();
+      modal.classList.remove('active');
+      this.render();
+    }
+  }
+
+  // NEW: Show delete playlist modal
+  showDeletePlaylistModal() {
+    const modal = document.getElementById('delete-playlist-modal');
+    document.getElementById('delete-playlist-message').textContent =
+        `Are you sure you want to delete "${this.currentPlaylist}"?`;
+
+    modal.classList.add('active');
+  }
+
+  // NEW: Confirm delete playlist
+  async confirmDeletePlaylist() {
+    if (this.currentPlaylist) {
+      // Remove videos from library if not in other playlists
+      const videosToCheck = this.playlists[this.currentPlaylist] || [];
+      delete this.playlists[this.currentPlaylist];
+
+      // Check each video
+      videosToCheck.forEach(videoId => {
+        const inOtherPlaylist = Object.values(this.playlists)
+            .some(playlist => playlist.includes(videoId));
+
+        if (!inOtherPlaylist) {
+          delete this.libraryVideos[videoId];
+        }
+      });
+
+      this.currentPlaylist = null;
+      await this.saveData();
+      document.getElementById('delete-playlist-modal').classList.remove('active');
+      this.render();
+    }
   }
 
   // Modal button handlers
@@ -602,27 +713,9 @@ class VibraryPopup {
       this.render();
     }, { once: true });
 
-    // Delete playlist button
+    // Delete playlist button - now shows custom modal
     document.getElementById('delete-playlist-btn')?.addEventListener('click', () => {
-      if (this.currentPlaylist && confirm(`Delete "${this.currentPlaylist}"?`)) {
-        // Remove videos from library if not in other playlists
-        const videosToCheck = this.playlists[this.currentPlaylist] || [];
-        delete this.playlists[this.currentPlaylist];
-
-        // Check each video
-        videosToCheck.forEach(videoId => {
-          const inOtherPlaylist = Object.values(this.playlists)
-              .some(playlist => playlist.includes(videoId));
-
-          if (!inOtherPlaylist) {
-            delete this.libraryVideos[videoId];
-          }
-        });
-
-        this.currentPlaylist = null;
-        this.saveData();
-        this.render();
-      }
+      this.showDeletePlaylistModal();
     }, { once: true });
 
     // Set name and make it editable
@@ -786,28 +879,12 @@ class VibraryPopup {
       });
     });
 
-    // Delete button
+    // Delete button - now shows custom modal
     container.querySelectorAll('.delete-btn').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const videoId = e.target.closest('.video-item').dataset.id;
-        if (confirm('Delete this video from history?')) {
-          // Check if in any playlist
-          const inPlaylist = Object.values(this.playlists)
-              .some(playlist => playlist.includes(videoId));
-
-          if (inPlaylist) {
-            // Just remove from history
-            delete this.historyVideos[videoId];
-          } else {
-            // Remove from both
-            delete this.historyVideos[videoId];
-            delete this.libraryVideos[videoId];
-          }
-
-          await this.saveData();
-          this.render();
-        }
+        this.showDeleteVideoModal(videoId);
       });
     });
 
@@ -1010,9 +1087,8 @@ class VibraryPopup {
         </div>
       `).join('');
 
-      // Add the divider and new playlist option at the bottom
+      // Add the new playlist option at the bottom with separator
       container.innerHTML += `
-        <div class="playlist-option-divider"></div>
         <div class="playlist-option playlist-option-new" data-action="create-new">
           <span class="playlist-option-icon">+</span> Create New Playlist
         </div>
