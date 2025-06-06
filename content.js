@@ -6,7 +6,7 @@ class VideoDetector {
     this.activeSessions = new Map(); // Track multiple video sessions
     this.blacklist = [];
     this.blacklistEnabled = false;
-    this.captureRetries = new Map(); // Track capture retry attempts
+    this.detectedVideos = new Map(); // Track detected videos by URL
 
     this.init();
   }
@@ -67,7 +67,7 @@ class VideoDetector {
       if (!metadata) return;
 
       const title = metadata.title;
-      const pageUrl = window.location.href; // Always use page URL, not video src
+      const pageUrl = window.location.href;
       const now = Date.now();
 
       // Skip if nothing changed or too recent
@@ -80,7 +80,7 @@ class VideoDetector {
         return;
       }
 
-      // Skip if URL is just the domain (like youtube.com)
+      // Skip if URL is just the domain
       try {
         const urlObj = new URL(pageUrl);
         if (urlObj.pathname === '/' && !urlObj.search) {
@@ -89,47 +89,30 @@ class VideoDetector {
         }
       } catch (e) {}
 
-      console.log('📀 Media Session detected:', title);
+      // Check if there's an actual playing video
+      const video = this.findMainVideo();
+      const isActuallyPlaying = video && !video.paused && video.currentTime > 0;
+
+      // For background tabs, only process if video is actually playing
+      if (!isActuallyPlaying && document.hidden) {
+        console.log('⏭️ Skipping background tab with metadata but no playback');
+        return;
+      }
+
+      console.log('📀 Media Session detected:', title, isActuallyPlaying ? '(playing)' : '(ready)');
 
       lastCheck = { title, url: pageUrl, time: now };
 
-      // Create video data with page URL
-      const videoData = {
-        id: `vid_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      // Check if we already have this URL
+      this.handleVideoDetection({
         title: title,
         artist: metadata.artist || '',
         album: metadata.album || '',
-        url: pageUrl, // Use page URL, not video src
-        website: this.getWebsiteName(pageUrl),
-        favicon: this.getFavicon(),
+        url: pageUrl,
         thumbnail: metadata.artwork?.[0]?.src || '',
-        watchedAt: Date.now(),
-        rating: 0
-      };
+        hasMediaSession: true
+      }, video, isActuallyPlaying);
 
-      // Save it
-      this.saveVideo(videoData);
-
-      // Try to start watch-based capture for video element
-      setTimeout(() => {
-        const video = this.findMainVideo();
-        try {
-          video.crossOrigin = 'anonymous';
-        } catch (e) {
-          // ignore if setting crossOrigin fails
-        }
-        if (video && video.duration > 5) {
-          chrome.storage.local.get('historyVideos', data => {
-            const history = data.historyVideos || {};
-            const already = Object.values(history).find(v => v.url === window.location.href && v.thumbnailCollection?.length);
-            if (!already) {
-              this.startWatchCapture(video, videoData.id);
-            } else {
-              console.log('📸 Already have thumbnails for this URL—skipping capture.');
-            }
-          });
-        }
-      }, 1000);
     }, 2000);
   }
 
@@ -139,29 +122,46 @@ class VideoDetector {
       if (e.target.tagName === 'VIDEO') {
         const video = e.target;
 
-        // Wait for media session to catch up
+        // Wait a bit for media session to potentially update
         setTimeout(() => {
-          // If no media session, create entry from video
+          const pageUrl = window.location.href;
+
+          // Check if we already handled this via media session
           if (!navigator.mediaSession?.metadata?.title) {
+            // No media session, handle as plain video
             this.handleVideoWithoutMediaSession(video);
+          } else {
+            // We have media session, just make sure capture is running
+            const detection = this.detectedVideos.get(pageUrl);
+            if (detection && !detection.captureStarted) {
+              this.startCapture(video, detection.id, pageUrl);
+            }
           }
-        }, 3000);
+        }, 1000);
       }
     }, true);
 
-    // Also watch for video source changes
+    // Watch for video source changes
     const observer = new MutationObserver((mutations) => {
       mutations.forEach(mutation => {
         if (mutation.type === 'attributes' &&
             mutation.target.tagName === 'VIDEO' &&
             (mutation.attributeName === 'src' || mutation.attributeName === 'currentSrc')) {
-          // Video source changed, wait and check if we need to update
-          setTimeout(() => {
-            const video = mutation.target;
-            if (!video.paused && video.duration > 5) {
-              this.handleVideoSourceChange(video);
+
+          const video = mutation.target;
+          const pageUrl = window.location.href;
+
+          // Clear detection for this URL as video changed
+          this.detectedVideos.delete(pageUrl);
+
+          // Cancel any active capture
+          for (const [sessionId, session] of this.activeSessions) {
+            if (session.video === video) {
+              session.cancelled = true;
+              this.activeSessions.delete(sessionId);
+              break;
             }
-          }, 1000);
+          }
         }
       });
     });
@@ -187,31 +187,57 @@ class VideoDetector {
     videoObserver.observe(document.body, { childList: true, subtree: true });
   }
 
-  handleVideoSourceChange(video) {
-    // Check if this is a new video
-    const pageUrl = window.location.href;
-    const title = document.title.replace(/^\(\d+\)\s*/, '').trim();
+  handleVideoDetection(videoInfo, video, isPlaying) {
+    const pageUrl = videoInfo.url;
+    const detection = this.detectedVideos.get(pageUrl);
 
-    // Find and cancel any existing session for this video element
-    for (const [sessionId, session] of this.activeSessions) {
-      if (session.video === video) {
-        session.cancelled = true;
-        this.activeSessions.delete(sessionId);
-        break;
+    if (detection) {
+      // Already detected this video
+      if (isPlaying && !detection.captureStarted && video) {
+        // Video is now playing, update timestamp and start capture
+        this.updateVideoTimestamp(detection.id);
+        this.startCapture(video, detection.id, pageUrl);
       }
+      return;
     }
 
-    // Start fresh detection
-    if (!navigator.mediaSession?.metadata?.title) {
-      this.handleVideoWithoutMediaSession(video);
+    // New video detection
+    const videoData = {
+      id: `vid_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      title: videoInfo.title,
+      artist: videoInfo.artist || '',
+      album: videoInfo.album || '',
+      url: pageUrl,
+      website: this.getWebsiteName(pageUrl),
+      favicon: this.getFavicon(),
+      thumbnail: videoInfo.thumbnail || '',
+      watchedAt: Date.now(),
+      rating: 0
+    };
+
+    // Track the detection
+    this.detectedVideos.set(pageUrl, {
+      id: videoData.id,
+      captureStarted: false,
+      detectedAt: Date.now()
+    });
+
+    // Save if playing or on visible tab
+    if (isPlaying || !document.hidden) {
+      this.saveVideo(videoData);
+
+      // Start capture if playing
+      if (isPlaying && video) {
+        this.startCapture(video, videoData.id, pageUrl);
+      }
     }
   }
 
   handleVideoWithoutMediaSession(video) {
     // Skip if too small or too short
-    if (video.duration < 5 || video.offsetWidth < 200) return;
+    if (!video || video.duration < 5 || video.offsetWidth < 200) return;
 
-    const pageUrl = window.location.href; // Always use page URL
+    const pageUrl = window.location.href;
     const title = document.title.replace(/^\(\d+\)\s*/, '').trim();
 
     // Skip if blacklisted
@@ -226,74 +252,105 @@ class VideoDetector {
       if (urlObj.pathname === '/' && !urlObj.search) return;
     } catch (e) {}
 
-    // Check for duplicate URL
-    const isDuplicate = this.lastProcessedVideo && this.lastProcessedVideo.url === pageUrl;
-
-    if (isDuplicate) {
-      // But still update capture if video element changed
-      const existingSession = Array.from(this.activeSessions.values())
-          .find(s => s.video === video && !s.cancelled);
-
-      if (!existingSession) {
-        // Find the video ID and start capture
-        setTimeout(async () => {
-          const data = await chrome.storage.local.get(['historyVideos']);
-          const historyVideos = data.historyVideos || {};
-
-          const recentVideo = Object.entries(historyVideos)
-              .find(([id, v]) => v.url === pageUrl);
-
-          if (recentVideo) {
-            this.startWatchCapture(video, recentVideo[0]);
-          }
-        }, 500);
-      }
-      return;
-    }
-
     console.log('🎥 Video without media session:', title);
 
-    this.lastProcessedVideo = { title, url: pageUrl, time: Date.now() };
-
-    const videoData = {
-      id: `vid_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    this.handleVideoDetection({
       title: title,
-      url: pageUrl, // Use page URL
-      website: this.getWebsiteName(pageUrl),
-      favicon: this.getFavicon(),
-      thumbnail: '', // Will be set by thumbnail capture
-      watchedAt: Date.now(),
-      rating: 0,
-      noMediaSession: true
-    };
+      url: pageUrl,
+      hasMediaSession: false
+    }, video, !video.paused);
+  }
 
-    // Start watch-based capture, but check storage for existing thumbnails
+  async startCapture(video, videoId, pageUrl) {
+    if (!video || video.duration < 5) return;
+
+    const detection = this.detectedVideos.get(pageUrl);
+    if (detection) {
+      detection.captureStarted = true;
+    }
+
+    // Try to enable CORS if possible
     try {
       video.crossOrigin = 'anonymous';
     } catch (e) {
-      // ignore if setting crossOrigin fails
+      // Ignore if we can't set crossOrigin
     }
-    chrome.storage.local.get('historyVideos', data => {
-      const history = data.historyVideos || {};
-      const already = Object.values(history).find(v => v.url === window.location.href && v.thumbnailCollection?.length);
-      if (!already) {
-        this.startWatchCapture(video, videoData.id);
-      } else {
-        console.log('📸 Already have thumbnails—skipping capture.');
-      }
-    });
 
-    // Save after a delay to get first thumbnail
-    setTimeout(() => {
-      this.saveVideo(videoData);
-    }, 1000);
+    // Get existing video data and thumbnails
+    const existingData = await this.getExistingVideoData(videoId, pageUrl);
+
+    if (existingData) {
+      console.log(`📸 Found existing video with ${existingData.thumbnails.length} thumbnails`);
+      videoId = existingData.id; // Use the existing ID
+
+      // Update our detection map with the correct ID
+      if (detection) {
+        detection.id = existingData.id;
+      }
+    }
+
+    this.startWatchCapture(video, videoId, existingData?.thumbnails || []);
+  }
+
+  async getExistingVideoData(videoId, pageUrl) {
+    try {
+      const data = await chrome.storage.local.get(['historyVideos', 'libraryVideos']);
+      const historyVideos = data.historyVideos || {};
+      const libraryVideos = data.libraryVideos || {};
+
+      // First try by ID
+      let video = historyVideos[videoId] || libraryVideos[videoId];
+
+      // If not found, try by URL
+      if (!video) {
+        for (const [id, v] of Object.entries(historyVideos)) {
+          if (v.url === pageUrl) {
+            video = v;
+            return {
+              id: id,
+              thumbnails: video.thumbnailCollection || []
+            };
+          }
+        }
+      }
+
+      return video ? {
+        id: videoId,
+        thumbnails: video.thumbnailCollection || []
+      } : null;
+    } catch (e) {
+      console.error('Failed to get existing video data:', e);
+      return null;
+    }
+  }
+
+  async updateVideoTimestamp(videoId) {
+    try {
+      const data = await chrome.storage.local.get(['historyVideos', 'libraryVideos']);
+      const historyVideos = data.historyVideos || {};
+      const libraryVideos = data.libraryVideos || {};
+
+      // Update timestamp to move to top of history
+      if (historyVideos[videoId]) {
+        historyVideos[videoId].watchedAt = Date.now();
+        console.log('📍 Updated timestamp to move video to top');
+      }
+
+      // Also update in library if exists
+      if (libraryVideos[videoId]) {
+        libraryVideos[videoId].watchedAt = Date.now();
+      }
+
+      await chrome.storage.local.set({ historyVideos, libraryVideos });
+    } catch (e) {
+      console.error('Failed to update timestamp:', e);
+    }
   }
 
   getWebsiteName(url) {
     try {
       const hostname = new URL(url).hostname.replace('www.', '');
 
-      // Known sites with nice names
       const knownSites = {
         'youtube.com': 'YouTube',
         'youtu.be': 'YouTube',
@@ -306,15 +363,13 @@ class VideoDetector {
         'twitter.com': 'Twitter',
         'x.com': 'X (Twitter)',
         'reddit.com': 'Reddit',
-        'tiktok.com': 'TikTok',
-        'hqporner.com': 'HQporner'
+        'tiktok.com': 'TikTok'
       };
 
       if (knownSites[hostname]) {
         return knownSites[hostname];
       }
 
-      // For others, remove .com/.org etc and capitalize
       const name = hostname.split('.')[0];
       return name.charAt(0).toUpperCase() + name.slice(1);
     } catch (e) {
@@ -323,7 +378,6 @@ class VideoDetector {
   }
 
   getFavicon() {
-    // Try to find the best favicon
     const selectors = [
       'link[rel="icon"]',
       'link[rel="shortcut icon"]',
@@ -336,7 +390,6 @@ class VideoDetector {
       if (icon?.href) return icon.href;
     }
 
-    // Try meta property for Open Graph
     const ogImage = document.querySelector('meta[property="og:image"]');
     if (ogImage?.content) return ogImage.content;
 
@@ -344,15 +397,14 @@ class VideoDetector {
   }
 
   findMainVideo() {
-    // Find the largest playing video
     const videos = Array.from(document.querySelectorAll('video'));
 
     return videos
-        .filter(v => !v.paused && v.duration > 5 && v.offsetWidth > 200)
+        .filter(v => v.duration > 5 && v.offsetWidth > 200)
         .sort((a, b) => (b.offsetWidth * b.offsetHeight) - (a.offsetWidth * a.offsetHeight))[0];
   }
 
-  startWatchCapture(video, videoId) {
+  startWatchCapture(video, videoId, existingThumbnails = []) {
     // Cancel any existing capture for this video
     for (const [sessionId, session] of this.activeSessions) {
       if (session.video === video) {
@@ -366,41 +418,36 @@ class VideoDetector {
       id: videoId,
       video: video,
       videoId: videoId,
-      thumbnails: [],
-      lastCaptureTime: -30, // Start capturing immediately
-      captureInterval: 15,  // Capture every 15 seconds initially
+      thumbnails: [], // New captures only
+      existingThumbnails: [...existingThumbnails], // Make a copy
+      lastCaptureTime: -30,
+      captureInterval: 15,
       cancelled: false,
       lastPlayTime: video.currentTime,
       startTime: Date.now(),
       failedAttempts: 0,
+      consecutiveFailures: 0,
       lastSeekTime: video.currentTime,
-      __hasForcedSeek: false,
-      maxThumbs: 10
+      maxThumbs: 10,
+      lastUpdateTime: 0
     };
 
-    // Keep crossOrigin, but remove the "initial seek" listener entirely
-    try {
-      video.crossOrigin = 'anonymous';
-    } catch (e) {
-      // ignore if setting crossOrigin fails
-    }
-
     this.activeSessions.set(videoId, session);
-    console.log(`📸 Starting watch-based capture for ${videoId}`);
+    console.log(`📸 Starting capture session for ${videoId} with ${existingThumbnails.length} existing thumbnails`);
 
     // Adjust capture interval based on video length
     if (video.duration < 60) {
-      session.captureInterval = 10; // Every 10 seconds for short videos
+      session.captureInterval = 10;
     } else if (video.duration < 300) {
-      session.captureInterval = 15; // Every 15 seconds for medium videos
+      session.captureInterval = 15;
     } else {
-      session.captureInterval = 30; // Every 30 seconds for long videos
+      session.captureInterval = 30;
     }
 
-    // Listen for seeking to handle skip forward
+    // Listen for seeking
     const seekHandler = () => {
       session.lastSeekTime = video.currentTime;
-      session.lastCaptureTime = video.currentTime - session.captureInterval - 1; // Force capture soon
+      session.lastCaptureTime = video.currentTime - session.captureInterval - 1;
     };
     video.addEventListener('seeked', seekHandler);
 
@@ -408,7 +455,6 @@ class VideoDetector {
       if (session.cancelled || !this.activeSessions.has(videoId)) return;
 
       try {
-        // Check if video is still on page and valid
         if (!document.contains(video)) {
           this.finalizeCapture(session);
           return;
@@ -416,7 +462,7 @@ class VideoDetector {
 
         // If paused for more than 5 minutes, finalize
         if (video.paused && Date.now() - session.startTime > 300000) {
-          if (session.thumbnails.length > 0) {
+          if (session.thumbnails.length > 0 || session.existingThumbnails.length > 0) {
             this.finalizeCapture(session);
           }
           return;
@@ -424,47 +470,75 @@ class VideoDetector {
 
         const currentTime = video.currentTime;
 
-        // Only capture if playing and moved forward or seeking
+        // Only capture if playing and moved forward
         if (!video.paused || Math.abs(currentTime - session.lastSeekTime) > 1) {
-          // Update play time if moved forward
           if (currentTime > session.lastPlayTime || Math.abs(currentTime - session.lastSeekTime) < 2) {
             session.lastPlayTime = currentTime;
 
-            // Capture if enough time has passed
-            if (currentTime - session.lastCaptureTime >= session.captureInterval ||
-                session.thumbnails.length === 0) {
+            // Check if we already have a thumbnail near this time
+            const allThumbs = [...session.existingThumbnails, ...session.thumbnails];
+            const hasNearbyThumb = allThumbs.some(t =>
+                Math.abs(t.time - currentTime) < session.captureInterval / 2
+            );
 
-              this.captureWithRetry(video, session).then(thumbnail => {
-                if (thumbnail && !session.cancelled) {
-                  session.thumbnails.push({
-                    time: currentTime,
-                    thumbnail: thumbnail
-                  });
+            // Capture if needed
+            if (!hasNearbyThumb &&
+                (currentTime - session.lastCaptureTime >= session.captureInterval ||
+                    allThumbs.length === 0)) {
 
-                  session.lastCaptureTime = currentTime;
-                  session.failedAttempts = 0; // Reset failed attempts on success
+              // Check if video is ready
+              if (video.readyState >= 2) {
+                this.captureFrame(video).then(thumbnail => {
+                  if (thumbnail && !session.cancelled) {
+                    const newThumb = {
+                      time: currentTime,
+                      thumbnail: thumbnail
+                    };
 
-                  // Update storage with current thumbnails
-                  this.updateThumbnail(videoId, thumbnail, session.thumbnails);
+                    session.thumbnails.push(newThumb);
+                    session.lastCaptureTime = currentTime;
+                    session.failedAttempts = 0;
+                    session.consecutiveFailures = 0;
 
-                  console.log(`📸 Captured at ${currentTime.toFixed(1)}s (${session.thumbnails.length} total)`);
-                }
-              });
+                    console.log(`📸 Captured at ${currentTime.toFixed(1)}s (${session.thumbnails.length} new, ${session.existingThumbnails.length} existing)`);
+
+                    // Update storage every 5 captures or 30 seconds
+                    if (session.thumbnails.length % 5 === 0 ||
+                        Date.now() - session.lastUpdateTime > 30000) {
+                      this.updateSessionThumbnails(session);
+                      session.lastUpdateTime = Date.now();
+                    }
+                  }
+                }).catch(err => {
+                  session.failedAttempts++;
+                  session.consecutiveFailures++;
+
+                  // Only log if not a "video not ready" error
+                  if (!err.message.includes('not ready') && session.consecutiveFailures === 1) {
+                    console.warn('Capture failed:', err.message);
+                  }
+
+                  // Stop trying after too many consecutive failures
+                  if (session.consecutiveFailures > 10) {
+                    console.log('📸 Too many failures, stopping capture');
+                    this.finalizeCapture(session);
+                  }
+                });
+              }
             }
           }
         }
 
-        // Continue checking – but only if page is visible
+        // Continue checking
         if (!document.hidden) {
           requestAnimationFrame(checkCapture);
         } else {
-          // When page is hidden, check less frequently
           setTimeout(checkCapture, 1000);
         }
 
       } catch (e) {
         console.error('Capture check error:', e);
-        if (session.thumbnails.length > 0) {
+        if (session.thumbnails.length > 0 || session.existingThumbnails.length > 0) {
           this.finalizeCapture(session);
         }
       }
@@ -480,170 +554,158 @@ class VideoDetector {
       }
     });
 
-    // Also listen for video end
+    // Clean up handlers
     video.addEventListener('ended', () => {
       video.removeEventListener('seeked', seekHandler);
       setTimeout(() => this.finalizeCapture(session), 1000);
     }, { once: true });
 
-    // Clean up on page unload
     window.addEventListener('beforeunload', () => {
       video.removeEventListener('seeked', seekHandler);
-      if (session.thumbnails.length > 0) {
+      if (session.thumbnails.length > 0 || session.existingThumbnails.length > 0) {
         this.finalizeCapture(session);
       }
     }, { once: true });
   }
 
-  async captureWithRetry(video, session, attempt = 0) {
-    try {
-      const thumbnail = await this.captureCurrentFrame(video);
-      if (thumbnail) {
-        return thumbnail;
-      }
-
-      // If capture returned null but no error, try once more
-      if (attempt === 0) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        return this.captureWithRetry(video, session, 1);
-      }
-
-      return null;
-    } catch (error) {
-      session.failedAttempts++;
-
-      // Only log first security error to reduce noise
-      if (session.failedAttempts === 1 && error.name === 'SecurityError') {
-        // Silently handle cross-origin restrictions
-      } else if (session.failedAttempts === 1 && error.name !== 'SecurityError') {
-        // Log non-security errors for debugging
-        console.warn('Capture attempt failed:', error.name);
-      }
-
-      // Keep trying for a bit in case it's temporary
-      if (session.failedAttempts < 5) {
-        return null;
-      }
-
-      // Give up after too many failures
-      if (session.failedAttempts === 5) {
-        // Silently stop trying
-      }
-
-      return null;
-    }
-  }
-
-  captureCurrentFrame(video) {
+  captureFrame(video) {
     return new Promise((resolve, reject) => {
+      if (video.readyState < 2) {
+        reject(new Error('Video not ready'));
+        return;
+      }
+
+      const canvas = document.createElement('canvas');
+      const scale = Math.min(1, 400 / video.videoWidth);
+      canvas.width = Math.floor(video.videoWidth * scale);
+      canvas.height = Math.floor(video.videoHeight * scale);
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Failed to get canvas context'));
+        return;
+      }
+
       try {
-        // Check if video is ready
-        if (video.readyState < 2) {
-          resolve(null);
-          return;
-        }
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Check for cross-origin restrictions silently
-        if (video.crossOrigin !== 'anonymous' && video.src && !video.src.startsWith(window.location.origin)) {
-          // Try a quick test draw
-          try {
-            const testCanvas = document.createElement('canvas');
-            const testCtx = testCanvas.getContext('2d');
-            testCanvas.width = 1;
-            testCanvas.height = 1;
-            testCtx.drawImage(video, 0, 0, 1, 1);
-            // If we get here, we can capture
-          } catch (e) {
-            // Expected for cross-origin videos
-            resolve(null);
-            return;
-          }
-        }
-
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-
-        // Set size - max 400px wide
-        const scale = Math.min(1, 400 / video.videoWidth);
-        canvas.width = Math.floor(video.videoWidth * scale);
-        canvas.height = Math.floor(video.videoHeight * scale);
-
-        // Try to draw frame
+        // Try to convert to data URL directly first
         try {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        } catch (drawError) {
-          // Don't log security errors - they're expected for cross-origin
-          if (drawError.name !== 'SecurityError') {
-            console.warn('Draw error:', drawError.name);
-          }
-          resolve(null);
-          return;
-        }
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.5);
+          resolve(dataUrl);
+        } catch (e) {
+          // If direct conversion fails, try blob method
+          canvas.toBlob(
+              (blob) => {
+                if (!blob) {
+                  reject(new Error('Failed to create blob'));
+                  return;
+                }
 
-        // Check if the canvas is actually painted
-        const imageData = ctx.getImageData(0, 0, 1, 1);
-        if (imageData.data[3] === 0) {
-          // Fully transparent, likely failed
-          resolve(null);
-          return;
-        }
-
-        // Convert to data URL with 50% compression for storage efficiency
-        canvas.toBlob(
-            (blob) => {
-              if (blob) {
                 const reader = new FileReader();
                 reader.onloadend = () => resolve(reader.result);
+                reader.onerror = () => reject(new Error('Failed to read blob'));
                 reader.readAsDataURL(blob);
-              } else {
-                resolve(null);
-              }
-            },
-            'image/jpeg',
-            0.5  // Reduced from 0.7 to 0.5 (50% quality)
-        );
-
-      } catch (e) {
-        // Don't log security errors - they're expected
-        if (e.name !== 'SecurityError') {
-          console.warn('Capture error:', e.name);
+              },
+              'image/jpeg',
+              0.5
+          );
         }
-        resolve(null);
+      } catch (e) {
+        if (e.name === 'SecurityError') {
+          reject(new Error('Cross-origin video'));
+        } else {
+          reject(new Error(`Capture failed: ${e.message}`));
+        }
       }
     });
   }
 
+  updateSessionThumbnails(session) {
+    // Merge current thumbnails
+    const mergedThumbs = this.mergeThumbnails(
+        session.existingThumbnails,
+        session.thumbnails,
+        session.maxThumbs
+    );
+
+    // Select middle thumbnail as primary
+    const primaryIndex = Math.floor(mergedThumbs.length / 2);
+    const primaryThumb = mergedThumbs[primaryIndex]?.thumbnail;
+
+    if (primaryThumb) {
+      this.updateThumbnails(session.videoId, primaryThumb, mergedThumbs);
+    }
+  }
+
+  mergeThumbnails(existing, newThumbs, maxCount) {
+    // Combine all thumbnails
+    const allThumbs = [...existing, ...newThumbs];
+
+    // Remove duplicates (thumbnails at very similar times)
+    const uniqueThumbs = [];
+    const timeThreshold = 5; // 5 seconds
+
+    // Sort by time
+    allThumbs.sort((a, b) => a.time - b.time);
+
+    for (const thumb of allThumbs) {
+      const isDuplicate = uniqueThumbs.some(t =>
+          Math.abs(t.time - thumb.time) < timeThreshold
+      );
+
+      if (!isDuplicate) {
+        uniqueThumbs.push(thumb);
+      }
+    }
+
+    console.log(`📸 Merging: ${existing.length} existing + ${newThumbs.length} new = ${uniqueThumbs.length} unique`);
+
+    // If we have the right amount or less, return as is
+    if (uniqueThumbs.length <= maxCount) {
+      return uniqueThumbs;
+    }
+
+    // Downsample evenly across the video duration
+    const result = [];
+    const step = (uniqueThumbs.length - 1) / (maxCount - 1);
+
+    for (let i = 0; i < maxCount; i++) {
+      const index = Math.round(i * step);
+      result.push(uniqueThumbs[index]);
+    }
+
+    console.log(`📸 Downsampled from ${uniqueThumbs.length} to ${result.length} thumbnails`);
+    return result;
+  }
+
   finalizeCapture(session) {
-    if (session.cancelled || session.thumbnails.length === 0) return;
+    if (session.cancelled) return;
 
     session.cancelled = true;
     this.activeSessions.delete(session.id);
 
-    const allThumbs = session.thumbnails;
-    const total = allThumbs.length;
-    const max = session.maxThumbs;
+    // Do final merge
+    const mergedThumbs = this.mergeThumbnails(
+        session.existingThumbnails,
+        session.thumbnails,
+        session.maxThumbs
+    );
 
-    let finalThumbs;
-    if (total <= max) {
-      finalThumbs = allThumbs;
-    } else {
-      finalThumbs = [];
-      for (let i = 0; i < max; i++) {
-        const idx = Math.floor(i * (total - 1) / (max - 1));
-        finalThumbs.push(allThumbs[idx]);
-      }
+    if (mergedThumbs.length > 0) {
+      // Always use middle thumbnail as primary
+      const primaryIndex = Math.floor(mergedThumbs.length / 2);
+      const primary = mergedThumbs[primaryIndex];
+
+      this.updateThumbnails(session.videoId, primary.thumbnail, mergedThumbs);
+      console.log(`✅ Finalized capture: ${session.thumbnails.length} new + ${session.existingThumbnails.length} existing = ${mergedThumbs.length} total`);
     }
-
-    const primary = finalThumbs[Math.floor(finalThumbs.length / 2)];
-
-    this.updateThumbnail(session.videoId, primary.thumbnail, finalThumbs);
-    console.log(`📸 Finalized capture with ${finalThumbs.length} thumbnails (downsampled from ${total})`);
   }
 
   cleanupOldSessions() {
-    // Remove sessions older than 5 minutes
     const fiveMinutesAgo = Date.now() - 300000;
 
+    // Clean up old capture sessions
     for (const [sessionId, session] of this.activeSessions) {
       if (session.startTime < fiveMinutesAgo || !document.contains(session.video)) {
         session.cancelled = true;
@@ -651,51 +713,55 @@ class VideoDetector {
         console.log(`🧹 Cleaned up old session: ${sessionId}`);
       }
     }
+
+    // Clean up old detections
+    for (const [url, detection] of this.detectedVideos) {
+      if (detection.detectedAt < fiveMinutesAgo - 300000) {
+        this.detectedVideos.delete(url);
+      }
+    }
   }
 
-  async updateThumbnail(videoId, thumbnail, collection) {
+  async updateThumbnails(videoId, primaryThumbnail, collection) {
     try {
       const data = await chrome.storage.local.get(['historyVideos', 'libraryVideos']);
       const historyVideos = data.historyVideos || {};
       const libraryVideos = data.libraryVideos || {};
+      let updated = false;
 
       // Update in history
-      let found = false;
-
-      // First try exact ID match
       if (historyVideos[videoId]) {
         historyVideos[videoId] = {
           ...historyVideos[videoId],
-          thumbnail: thumbnail,
+          thumbnail: primaryThumbnail,
           thumbnailCollection: collection
         };
-        found = true;
+        updated = true;
 
-        // Also update in library if it exists there
+        // Also update in library if exists
         if (libraryVideos[videoId]) {
           libraryVideos[videoId] = {
             ...libraryVideos[videoId],
-            thumbnail: thumbnail,
+            thumbnail: primaryThumbnail,
             thumbnailCollection: collection
           };
         }
       } else {
-        // Fallback: find by URL and recent time
+        // Try to find by URL
+        const pageUrl = window.location.href;
         for (const [id, video] of Object.entries(historyVideos)) {
-          if (video.url === window.location.href &&
-              Date.now() - video.watchedAt < 60000) {
+          if (video.url === pageUrl) {
             historyVideos[id] = {
               ...video,
-              thumbnail: thumbnail,
+              thumbnail: primaryThumbnail,
               thumbnailCollection: collection
             };
-            found = true;
+            updated = true;
 
-            // Also update in library if it exists there
             if (libraryVideos[id]) {
               libraryVideos[id] = {
                 ...libraryVideos[id],
-                thumbnail: thumbnail,
+                thumbnail: primaryThumbnail,
                 thumbnailCollection: collection
               };
             }
@@ -704,19 +770,13 @@ class VideoDetector {
         }
       }
 
-      if (found) {
+      if (updated) {
         await chrome.storage.local.set({ historyVideos, libraryVideos });
+        console.log('💾 Updated thumbnails in storage');
       }
     } catch (e) {
-      if (e.message?.includes('Extension context invalidated')) {
-        console.log('Extension context invalidated - stopping capture');
-        // Cancel all active sessions
-        for (const session of this.activeSessions.values()) {
-          session.cancelled = true;
-        }
-        this.activeSessions.clear();
-      } else {
-        console.error('Failed to update thumbnail:', e);
+      if (!e.message?.includes('Extension context invalidated')) {
+        console.error('Failed to update thumbnails:', e);
       }
     }
   }
@@ -727,22 +787,36 @@ class VideoDetector {
       const historyVideos = data.historyVideos || {};
 
       // Check for existing video with same URL
-      const existingVideo = Object.entries(historyVideos).find(([id, v]) => v.url === videoData.url);
+      const existingEntry = Object.entries(historyVideos).find(([id, v]) => v.url === videoData.url);
 
-      if (existingVideo) {
-        console.log('⏭️ Skipping duplicate URL:', videoData.url);
+      if (existingEntry) {
+        // Update timestamp to move to top
+        const [existingId, existingData] = existingEntry;
+        historyVideos[existingId] = {
+          ...existingData,
+          watchedAt: Date.now()
+        };
+
+        await chrome.storage.local.set({ historyVideos });
+        console.log('📍 Updated existing video timestamp');
+
+        // Update our detection map with the correct ID
+        this.detectedVideos.set(videoData.url, {
+          id: existingId,
+          captureStarted: false,
+          detectedAt: Date.now()
+        });
+
         return;
       }
 
-      // Save new video to history
+      // Save new video
       historyVideos[videoData.id] = videoData;
       await chrome.storage.local.set({ historyVideos });
 
       console.log('✅ Saved to history:', videoData.title);
     } catch (e) {
-      if (e.message?.includes('Extension context invalidated')) {
-        console.log('Extension context invalidated - cannot save');
-      } else {
+      if (!e.message?.includes('Extension context invalidated')) {
         console.error('Failed to save:', e);
       }
     }
